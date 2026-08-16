@@ -1,0 +1,31 @@
+# PSU Career Category & Degree Alignment System
+#
+# Tested on Python 3.12. Python 3.13+ may not yet have wheels for xgboost/shap,
+# so if `pip install` starts compiling from source, switch to 3.11 or 3.12.
+#
+#   python3.12 -m venv .venv
+#   source .venv/bin/activate          # Windows: .venv\Scripts\activate
+#   pip install -r requirements.txt
+
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+scipy>=1.11
+
+# Extreme Gradient Boosting - the primary predictive model.
+# If this cannot be installed the system automatically falls back to
+# scikit-learn's HistGradientBoostingClassifier and says so on startup.
+xgboost>=2.0
+
+# SHapley Additive exPlanations - the explainability layer.
+# Without it the system falls back to permutation importance.
+shap>=0.44
+
+# SMOTE and the leakage-safe pipeline that keeps resampling inside CV folds.
+imbalanced-learn>=0.12
+
+# Figures.
+matplotlib>=3.8
+
+# Model persistence.
+joblib>=1.3

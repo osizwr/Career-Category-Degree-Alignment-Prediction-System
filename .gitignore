@@ -1,0 +1,23 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Generated artefacts -- these are all reproducible with `python main.py`
+outputs/
+
+# The synthetic dataset is regenerated deterministically from seed 42.
+# Once you have REAL student data, keep it out of version control entirely:
+# it is personal information covered by RA 10173.
+# data/*.csv
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
