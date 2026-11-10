@@ -162,7 +162,12 @@ def build_models(n_classes: int = len(cfg.WORK_CATEGORIES),
     Each value is a fitted-on-demand sklearn/imblearn Pipeline, so the caller can
     treat all three identically in cross-validation.
     """
-    median_impute = SimpleImputer(strategy="median")
+    # keep_empty_features=True matters on real data: a questionnaire item that
+    # nobody answered arrives as an all-NaN column, and the default behaviour
+    # DROPS it, so the matrix the model sees no longer matches the feature-name
+    # list every downstream consumer (SHAP, the per-student reports) relies on.
+    # Kept columns are constant, hence inert for all three estimators.
+    median_impute = SimpleImputer(strategy="median", keep_empty_features=True)
 
     # --- ZeroR: no scaling, no SMOTE, no features used at all ---------------
     zero_r = SkPipeline([
@@ -172,7 +177,7 @@ def build_models(n_classes: int = len(cfg.WORK_CATEGORIES),
 
     # --- Logistic Regression: needs imputation + scaling ---------------------
     logreg_steps = [
-        ("impute", SimpleImputer(strategy="median")),
+        ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
         ("scale", StandardScaler()),
     ]
     if use_smote:
@@ -189,7 +194,7 @@ def build_models(n_classes: int = len(cfg.WORK_CATEGORIES),
     ))
 
     # --- XGBoost: trees do not need scaling, but SMOTE needs complete data ---
-    xgb_steps = [("impute", SimpleImputer(strategy="median"))]
+    xgb_steps = [("impute", SimpleImputer(strategy="median", keep_empty_features=True))]
     if use_smote:
         xgb_steps.append(("smote", AdaptiveSMOTE(random_state=random_state)))
     xgb_steps.append(("clf", _boosting_estimator(n_classes, random_state)))
