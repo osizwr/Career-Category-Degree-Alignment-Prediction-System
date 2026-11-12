@@ -22,7 +22,8 @@ labelling       the Chapter IV scoring rubric: 30% core courses, 20% GWA,
 data_generator  synthetic cohort used until the real AY 2026-2027 data exists
 models          ZeroR / Logistic Regression / XGBoost + leak-free SMOTE pipelines
 benchmark       70-30 split, Stratified 5-Fold CV, Accuracy/Precision/Recall/F1
-explain         SHAP global and per-student explanations
+explain         SHAP global and per-student explanations, including the
+                sentence-level narration generated from the SHAP values
 alignment       % degree alignment, career-track matching, employer mapping
 recommender     ties everything into a single per-student report
 interactive     the questionnaire a student answers to test their own profile

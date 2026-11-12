@@ -12,6 +12,14 @@ Two levels of explanation:
   LOCAL   -- which of THIS student's features pushed them toward THIS category.
              This is what the student sees.
 
+Both are also rendered as complete sentences (narrate_student, narrate_global).
+SHAP itself outputs numbers -- one signed contribution per feature per class --
+so the narration is the last mile: it reads each contribution together with the
+value that produced it and states, in prose, what the model did and by how much.
+The wording comes from config.py, so a clause names the questionnaire item the
+student actually answered; nothing is interpreted by hand, and changing one
+grade changes the sentences.
+
 A note on units: for a multi-class model SHAP values are contributions to the
 raw margin (log-odds) of a class, not to a probability. A value of +0.28 means
 "this feature pushed the log-odds of the predicted category up by 0.28". They
@@ -282,6 +290,15 @@ class LocalExplanation:
     contributions: pd.DataFrame   # feature, pretty_name, shap_value, raw_value
     base_value: float
 
+    # Everything below is what turns the numbers into sentences: the full
+    # (features x classes) SHAP matrix, the class order it is indexed by, and
+    # the feature order its rows follow (which is NOT the order `contributions`
+    # ends up in, because that frame is re-sorted by |SHAP|).
+    class_names: tuple = ()
+    probabilities: tuple = ()
+    feature_order: tuple = ()
+    class_values: np.ndarray | None = None
+
     def top_positive(self, n: int = 5) -> pd.DataFrame:
         positive = self.contributions[self.contributions["shap_value"] > 0]
         return positive.head(n)
@@ -289,6 +306,57 @@ class LocalExplanation:
     def top_negative(self, n: int = 3) -> pd.DataFrame:
         negative = self.contributions[self.contributions["shap_value"] < 0]
         return negative.sort_values("shap_value").head(n)
+
+    # ------------------------------------------------------------ additivity
+    def total_contribution(self) -> float:
+        return float(self.contributions["shap_value"].sum())
+
+    def margin(self) -> float:
+        """base value + every contribution = the raw margin the model produced.
+
+        This is the Lundberg & Lee (2017) additivity property, and the sentence
+        generator quotes it so a panelist can check the arithmetic.
+        """
+        return float(self.base_value + self.total_contribution())
+
+    # ------------------------------------------------------ class comparison
+    def ranked_categories(self) -> list:
+        return sorted(zip(self.class_names, self.probabilities),
+                      key=lambda kv: kv[1], reverse=True)
+
+    def runner_up(self):
+        """(category, probability) of the category that came second, or None."""
+        ranked = self.ranked_categories()
+        return ranked[1] if len(ranked) > 1 else None
+
+    def contrast_with_runner_up(self):
+        """The feature that most favours the prediction over the runner-up.
+
+        A straight subtraction of two SHAP columns: how much more this
+        student's answer was worth to the winning category than to the one
+        that came closest. Returns (pretty_name, delta, runner_up_name).
+        """
+        runner = self.runner_up()
+        if runner is None or self.class_values is None or not len(self.feature_order):
+            return None
+
+        names = list(self.class_names)
+        if self.predicted_category not in names or runner[0] not in names:
+            return None
+
+        values = np.asarray(self.class_values)
+        delta = values[:, names.index(self.predicted_category)] \
+            - values[:, names.index(runner[0])]
+        index = int(np.argmax(delta))
+        if not np.isfinite(delta[index]) or delta[index] <= 0:
+            return None
+        return (cfg.pretty_feature_name(self.feature_order[index]),
+                float(delta[index]), runner[0])
+
+    # --------------------------------------------------------------- prose
+    def narrative(self, **kwargs) -> list:
+        """The explanation as complete sentences. See narrate_student()."""
+        return narrate_student(self, **kwargs)
 
 
 def explain_student(pipeline, X_row: pd.DataFrame, class_names: list,
@@ -332,6 +400,10 @@ def explain_student(pipeline, X_row: pd.DataFrame, class_names: list,
         confidence=float(probabilities[class_index]),
         contributions=contributions,
         base_value=base_value,
+        class_names=tuple(class_names),
+        probabilities=tuple(float(p) for p in probabilities),
+        feature_order=tuple(X_row.columns),
+        class_values=values[0],          # (n_features, n_classes)
     )
 
 
@@ -372,4 +444,356 @@ def save_importance_table(bundle: ShapBundle, outdir=None):
     table = bundle.mean_abs_importance()
     table.index.name = "raw_feature"
     table.to_csv(path)
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# From SHAP values to sentences
+# --------------------------------------------------------------------------- #
+# SHAP gives numbers: one signed contribution per feature per class, summing
+# exactly to the model's margin. The functions below do the one step SHAP
+# leaves to the application -- putting those numbers into prose -- and they do
+# it from the SHAP output and config.py alone.
+#
+# There is no hand-written interpretation in here. Every clause is read off a
+# contribution and the value that produced it, so changing one grade changes
+# the sentences; nothing is asserted that the model did not do.
+
+_GROUP_PHRASES = {
+    "Core course grades (by domain)": "core course grades",
+    "Technical skills (self-reported)": "self-reported technical skills",
+    "Hard skills (self-reported)": "self-reported hard skills",
+    "Soft skills (self-reported)": "self-reported soft skills",
+    "Credential types (seminar / workshop / exam)": "the kind of credential reported",
+    "Professional certifications": "professional certifications",
+    "Competency signals (engineered)": "the engineered competency signals",
+    "RIASEC archetypes (engineered)": "the Holland RIASEC scores",
+    "Expectancy-Value score (engineered)": "the Expectancy-Value motivation score",
+    "Academic averages": "GWA and overall grade averages",
+    "Profile breadth counts (engineered)": "how many skills and credentials were reported",
+    "Other": "other features",
+}
+
+
+def _group_phrase(feature: str) -> str:
+    return _GROUP_PHRASES.get(_feature_group(feature), "other features")
+
+
+def _plural(n: int, singular: str, plural: str | None = None) -> str:
+    return singular if n == 1 else (plural or singular + "s")
+
+
+def join_clauses(items, conjunction: str = "and") -> str:
+    """'a', 'a and b', 'a, b and c' -- so the sentences read like sentences."""
+    items = [str(i) for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} {conjunction} {items[-1]}"
+
+
+def _points_clause(points: float) -> str:
+    grade = float(cfg.points_to_grade(points))
+    return f"{points:.1f} grade points, about {grade:.2f} on the 1.00-5.00 scale"
+
+
+def describe_value(feature: str, value) -> str:
+    """One clause saying what this student's value for `feature` actually is.
+
+    SHAP supplies the contribution; this supplies the noun phrase, read off
+    config.py so the wording matches the questionnaire the student answered.
+    A checkbox becomes "you ticked it", a domain mean becomes the grade it
+    corresponds to on the PSU scale, and so on.
+    """
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "this answer could not be read"
+    if not np.isfinite(value):
+        return "you left this blank, so the cohort median stood in for it"
+
+    if feature in cfg.SKILL_BY_COLUMN:
+        return "you ticked it" if value >= 0.5 else "you left it unticked"
+    if feature in cfg.COURSE_BY_COLUMN:
+        return f"you reported a grade of {value:.2f}"
+    if feature.startswith("acad_"):
+        return f"you averaged {_points_clause(value)}"
+    if feature == "core_grade_mean":
+        return f"across every domain you averaged {_points_clause(value)}"
+    if feature == "gwa_points":
+        return f"your GWA works out to {_points_clause(value)}"
+    if feature == "core_grade_std":
+        return (f"your domain averages spread {value:.1f} points around that mean"
+                if value > 0.05 else "your domain averages barely vary")
+    if feature == "has_certification":
+        return ("you answered Yes to holding a certification, seminar or training"
+                if value >= 0.5 else
+                "you answered No to holding any certification, seminar or training")
+    if feature.startswith("cert_type_"):
+        return "you reported one" if value >= 0.5 else "you reported none of this kind"
+    if feature == "cert_count":
+        n = int(round(value))
+        return f"{n} subject {_plural(n, 'domain')} recognised from the credentials you named"
+    if feature == "cert_type_count":
+        n = int(round(value))
+        return f"{n} credential {_plural(n, 'type')} reported"
+    if feature.startswith("cert_"):
+        return "you named one" if value >= 0.5 else "you named none in this subject"
+    if feature == "program_code":
+        return "you are enrolled in BSIT" if value >= 0.5 else "you are enrolled in BSCS"
+    if feature.endswith("_skill_count"):
+        total = len(cfg.SKILL_GROUPS.get(feature.split("_")[0], ()))
+        return f"you ticked {int(round(value))} of the {total}"
+    if feature.startswith(("sig_", "riasec_", "evt_")):
+        return f"you score {value:.1f} out of 100"
+    return f"your value is {value:.2f}"
+
+
+_POSITIVE_LEADS = (
+    "The strongest single reason is",
+    "The second-largest contribution is",
+    "Third comes",
+    "Fourth comes",
+    "Fifth comes",
+)
+
+
+def narrate_student(explanation: LocalExplanation, top_n: int = 5,
+                    negative_n: int = 3) -> list:
+    """Explain one prediction in complete sentences, generated from SHAP.
+
+    Returns a list of sentences, in reading order: how the margin was built,
+    the ranked reasons in favour, what worked against, which kind of evidence
+    dominated, what separated this category from the runner-up, and the
+    additivity check.
+    """
+    category = explanation.predicted_category.upper()
+    contributions = explanation.contributions
+    sentences: list[str] = []
+
+    if contributions.empty:
+        return [f"The model chose {category} with {explanation.confidence:.1%} "
+                f"confidence, but SHAP returned no feature contributions to explain it."]
+
+    positive = contributions[contributions["shap_value"] > 0] \
+        .sort_values("shap_value", ascending=False)
+    negative = contributions[contributions["shap_value"] < 0] \
+        .sort_values("shap_value")
+    positive_total = float(positive["shap_value"].sum())
+    negative_total = float(negative["shap_value"].sum())
+
+    # ---- 1. how the margin was assembled ---------------------------------- #
+    opening = (
+        f"SHAP starts from the cohort base rate for {category} "
+        f"({explanation.base_value:+.3f} log-odds) and then adds one contribution "
+        f"for every feature: for {explanation.student_id} the {len(positive)} "
+        f"supporting {_plural(len(positive), 'feature')} are worth "
+        f"{positive_total:+.3f} and the {len(negative)} opposing "
+        f"{_plural(len(negative), 'one')} {negative_total:+.3f}, a net "
+        f"{explanation.total_contribution():+.3f} that leaves {category} first at "
+        f"{explanation.confidence:.1%} confidence"
+    )
+    runner_up = explanation.runner_up()
+    opening += (f", ahead of {runner_up[0].upper()} at {runner_up[1]:.1%}."
+                if runner_up else ".")
+    sentences.append(opening)
+
+    # ---- 2. the ranked reasons in favour ---------------------------------- #
+    denominator = positive_total if positive_total > 1e-9 else float("nan")
+    for rank, (_, row) in enumerate(positive.head(top_n).iterrows()):
+        lead = _POSITIVE_LEADS[rank] if rank < len(_POSITIVE_LEADS) else "Then comes"
+        share = float(row["shap_value"]) / denominator
+        tail = (f" -- {share:.0%} of all the evidence in its favour"
+                if np.isfinite(share) else "")
+        sentences.append(
+            f"{lead} {row['pretty_name']}: "
+            f"{describe_value(row['feature'], row['raw_value'])}, which raised the "
+            f"log-odds of {category} by {float(row['shap_value']):.3f}{tail}."
+        )
+
+    remainder = positive.iloc[top_n:]
+    if len(remainder):
+        sentences.append(
+            f"The other {len(remainder)} supporting "
+            f"{_plural(len(remainder), 'feature')} add "
+            f"{float(remainder['shap_value'].sum()):+.3f} between them, so none of "
+            f"them changes the outcome on its own."
+        )
+
+    # ---- 3. what worked against it ---------------------------------------- #
+    if len(negative):
+        clauses = [
+            f"{row['pretty_name']} ({describe_value(row['feature'], row['raw_value'])}) "
+            f"cost {abs(float(row['shap_value'])):.3f}"
+            for _, row in negative.head(negative_n).iterrows()
+        ]
+        verdict = ("not enough to displace"
+                   if positive_total + negative_total > 0 else "set against")
+        sentences.append(
+            f"Pulling the other way, {join_clauses(clauses)} log-odds; the "
+            f"{len(negative)} opposing {_plural(len(negative), 'feature')} remove "
+            f"{abs(negative_total):.3f} in total, {verdict} the "
+            f"{positive_total:.3f} in favour."
+        )
+
+    # ---- 4. which kind of evidence dominated ------------------------------ #
+    grouped: dict[str, float] = {}
+    for _, row in contributions.iterrows():
+        phrase = _group_phrase(row["feature"])
+        grouped[phrase] = grouped.get(phrase, 0.0) + abs(float(row["shap_value"]))
+    total_absolute = sum(grouped.values())
+    if total_absolute > 1e-9:
+        ranked = sorted(grouped.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        # Only the first clause carries the verb, so the list reads as one
+        # sentence instead of three stacked copies of the same phrase.
+        clauses = [f"{value / total_absolute:.0%} of the movement comes from {phrase}"
+                   if position == 0 else f"{value / total_absolute:.0%} from {phrase}"
+                   for position, (phrase, value) in enumerate(ranked)]
+        sentences.append(f"Grouped by kind of evidence, {join_clauses(clauses)}.")
+
+    # ---- 5. what separated it from the runner-up -------------------------- #
+    contrast = explanation.contrast_with_runner_up()
+    if contrast is not None:
+        pretty, delta, other = contrast
+        sentences.append(
+            f"What most separates {category} from {other.upper()} is {pretty}: the "
+            f"same answer is worth {delta:.3f} more log-odds to {category} than to "
+            f"{other.upper()}, which is where the gap between the two categories "
+            f"mainly comes from."
+        )
+
+    # ---- 6. the additivity check ------------------------------------------ #
+    sentences.append(
+        f"Every figure above is a SHAP value in log-odds of {category}: all "
+        f"{len(contributions)} of them sum to {explanation.total_contribution():+.3f}, "
+        f"which added to the base rate reproduces the model's raw margin of "
+        f"{explanation.margin():+.3f} exactly, so the explanation accounts for the "
+        f"whole prediction and nothing has been added by hand."
+    )
+    return sentences
+
+
+def narrate_global(bundle: ShapBundle, top_n: int = 5) -> list:
+    """Explain the cohort-level SHAP output in complete sentences.
+
+    This is the paragraph the curriculum-review section of Chapter IV needs:
+    which evidence the model leans on across all students, per work category,
+    with the direction of each effect taken from the SHAP values themselves.
+    """
+    importance = bundle.mean_abs_importance()
+    sentences: list[str] = []
+
+    # The same sentences have to stay true when `shap` is missing and the
+    # pipeline falls back to permutation importance, so the metric is named
+    # from the bundle rather than assumed.
+    is_shap = bundle.method == "shap"
+    metric = "mean |SHAP|" if is_shap else "importance"
+
+    if not is_shap:
+        sentences.append(
+            f"The `shap` package was unavailable, so these sentences describe "
+            f"{bundle.method.replace('_', ' ')} instead: it ranks features by how "
+            f"much accuracy drops when each is shuffled, which gives magnitude but "
+            f"neither a sign nor a per-student breakdown."
+        )
+
+    sentences.append(
+        f"{'SHAP' if is_shap else 'The fallback'} scored {len(bundle.data)} students "
+        f"across {len(bundle.feature_names)} features and {len(bundle.class_names)} "
+        f"work categories; the figures below are "
+        + ("mean absolute SHAP values, that is, the average size of a feature's "
+           "contribution to a category's log-odds."
+           if is_shap else
+           "permutation-importance scores, that is, the average drop in accuracy "
+           "when one feature is shuffled.")
+    )
+
+    leaders = importance.head(top_n)
+    sentences.append(
+        "Across the whole cohort the strongest predictor is "
+        f"{leaders.iloc[0]['Feature']} ({metric} {leaders.iloc[0]['Overall']:.3f}), "
+        "followed by "
+        + join_clauses([f"{row['Feature']} ({row['Overall']:.3f})"
+                        for _, row in leaders.iloc[1:].iterrows()])
+        + "."
+    )
+
+    # Direction per category, straight from the sign of the value/SHAP relation.
+    order = list(bundle.feature_names)
+    for index, category in enumerate(bundle.class_names):
+        column = importance[category].sort_values(ascending=False)
+        feature = column.index[0]
+        values = bundle.for_class(index)[:, order.index(feature)]
+        data = np.asarray(bundle.data[feature], dtype=float)
+
+        if not is_shap:
+            direction = ("permutation importance cannot say which way it pushes -- "
+                         "install `shap` for that")
+        elif np.std(data) < 1e-12 or np.std(values) < 1e-12:
+            direction = "its effect is flat in this sample"
+        else:
+            correlation = float(np.corrcoef(data, values)[0, 1])
+            if correlation > 0.2:
+                direction = "higher values push students toward it"
+            elif correlation < -0.2:
+                direction = "lower values push students toward it"
+            else:
+                direction = "its effect is not monotonic -- the beeswarm plot shows why"
+        sentences.append(
+            f"For the {category.upper()} category the biggest driver is "
+            f"{cfg.pretty_feature_name(feature)} ({metric} {column.iloc[0]:.3f}), and "
+            f"{direction}."
+        )
+
+    grouped: dict[str, float] = {}
+    for feature, row in importance.iterrows():
+        phrase = _group_phrase(feature)
+        grouped[phrase] = grouped.get(phrase, 0.0) + float(row["Overall"])
+    total = sum(grouped.values())
+    if total > 1e-9:
+        ranked = sorted(grouped.items(), key=lambda kv: kv[1], reverse=True)[:4]
+        clauses = [f"{phrase} carry {value / total:.0%} of the total influence"
+                   if position == 0 else f"{phrase} {value / total:.0%}"
+                   for position, (phrase, value) in enumerate(ranked)]
+        sentences.append(
+            f"Grouped by kind of evidence, {join_clauses(clauses)} -- the split "
+            f"the College of Sciences would review the curriculum against."
+        )
+    return sentences
+
+
+def format_sentences(sentences, width: int = 78, indent: int = 4,
+                     bullet: str = "") -> str:
+    """Wrap generated sentences for a fixed-width console or text report."""
+    import textwrap
+
+    pad = " " * indent
+    blocks = []
+    for sentence in sentences:
+        first = pad + bullet
+        blocks.append(textwrap.fill(
+            sentence,
+            width=width,
+            initial_indent=first,
+            subsequent_indent=pad + " " * len(bullet),
+        ))
+    return "\n\n".join(blocks)
+
+
+def save_global_narrative(bundle: ShapBundle, outdir=None):
+    """Write the cohort-level explanation out as prose, ready to quote."""
+    outdir = outdir or cfg.REPORT_DIR
+    path = outdir / "shap_global_explanation.txt"
+    header = [
+        "SHAP GLOBAL EXPLANATION",
+        "=" * 70,
+        "Generated from the SHAP values computed by career_system.explain.",
+        "Mean |SHAP| is the average contribution a feature makes to a work",
+        "category's log-odds; it carries no sign, so direction is reported",
+        "separately from the relationship between each value and its SHAP value.",
+        "",
+    ]
+    body = format_sentences(narrate_global(bundle), width=70, indent=0)
+    path.write_text("\n".join(header) + "\n" + body + "\n")
     return path

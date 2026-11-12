@@ -65,8 +65,8 @@ python main.py predict --answers me.json            # replay them later
 It asks for your degree program first (BSCS or BSIT), then shows only that program's
 prospectus, then Part III and Part IV exactly as printed on the form. You get back the
 predicted work category with the model's confidence, the illustrative job roles inside it,
-your BSCS/BSIT alignment, your Holland code, the SHAP breakdown of what drove the
-prediction, your skill gaps and the matching Palawan employers — plus the Chapter IV
+your BSCS/BSIT alignment, your Holland code, the SHAP explanation of what drove the
+prediction written out in sentences, your skill gaps and the matching Palawan employers — plus the Chapter IV
 labelling rubric scored on the same answers, so you can see where the model and the rubric
 agree.
 
@@ -85,7 +85,8 @@ outputs/
 │               SHAP beeswarms + global + per-student explanations,
 │               skill profile, competency radar, GWA distributions
 ├── models/     fitted pipelines (.joblib) + the label encoder
-└── reports/    per-student recommendation reports (.txt and .json)
+└── reports/    per-student recommendation reports (.txt and .json),
+                shap_global_explanation.txt
 ```
 
 A sample run on 400 synthetic students:
@@ -106,6 +107,41 @@ full AY 2026–2027 cohort is in.
 
 ---
 
+## The explanation is prose, not a table of numbers
+
+SHAP produces one signed contribution per feature per class, and those contributions sum
+exactly to the model's margin. `explain.narrate_student` turns that output into sentences,
+and `explain.narrate_global` does the same for the cohort:
+
+```
+SHAP starts from the cohort base rate for TECHNICAL (+0.184 log-odds) and then
+adds one contribution for every feature: for DEMO-BSIT the 37 supporting features
+are worth +4.741 and the 25 opposing ones -1.487, a net +3.254 that leaves
+TECHNICAL first at 98.5% confidence, ahead of MANAGERIAL at 0.6%.
+
+The strongest single reason is Networking (Technical skill): you ticked it, which
+raised the log-odds of TECHNICAL by 0.768 -- 16% of all the evidence in its favour.
+
+Pulling the other way, Computing Foundations (Grades) (you averaged 81.2 grade
+points, about 1.75 on the 1.00-5.00 scale) cost 0.291 ... the 25 opposing features
+remove 1.487 in total, not enough to displace the 4.741 in favour.
+
+What most separates TECHNICAL from MANAGERIAL is Networking (Technical skill): the
+same answer is worth 1.015 more log-odds to TECHNICAL than to MANAGERIAL, which is
+where the gap between the two categories mainly comes from.
+```
+
+Nothing in those sentences is written by hand. The noun phrases come from `config.py`
+(so the wording matches the item the student answered), the numbers are the SHAP values,
+and the final sentence quotes the additivity check — base value + every contribution =
+the model's raw margin — so a panelist can verify the explanation accounts for the whole
+prediction. Change one grade and every clause changes with it.
+
+The signed table is still there for the appendix: `shap_explanation` in the JSON report,
+`outputs/tables/shap_feature_importance.csv`, and the per-student bar chart.
+
+---
+
 ## How it maps to your chapters
 
 ### Chapter III — the theories are code, not prose
@@ -117,7 +153,7 @@ full AY 2026–2027 cohort is in.
 | **Ensemble Learning** | `models._boosting_estimator` | Regularised gradient-boosted trees |
 | **XGBoost** | `models._boosting_estimator` | The Ω regularisation terms (`reg_lambda`, `reg_alpha`, `gamma`) from the objective function |
 | **ZeroR** | `models.ZeroRClassifier` | The null-accuracy-floor formula, implemented literally |
-| **SHAP** | `explain.py` | Global + per-student attributions in log-odds space |
+| **SHAP** | `explain.py` | Global + per-student attributions in log-odds space, narrated as sentences by `narrate_student` / `narrate_global` |
 | **SMOTE** | `models.AdaptiveSMOTE` | Synthetic minority samples, generated **inside** each CV fold |
 | **Stratified K-Fold** | `benchmark.run_benchmark` | k=5, class proportions preserved per fold |
 | **Information Overload** | `alignment.score_career_tracks` | Reduces 16 career tracks to a ranked top 3 |
@@ -268,7 +304,7 @@ psu-career-alignment/
 │   ├── data_generator.py       synthetic cohort
 │   ├── models.py               ZeroR, LogReg, XGBoost + leak-free pipelines
 │   ├── benchmark.py            split, CV, metrics, McNemar, figures
-│   ├── explain.py              SHAP global + per-student
+│   ├── explain.py              SHAP global + per-student, and the sentences for both
 │   ├── alignment.py            degree alignment %, career match, employers
 │   ├── profiling.py            descriptive statistics (SOP 1)
 │   ├── recommender.py          the full per-student report

@@ -10,7 +10,7 @@ single fourth-year student it produces:
     * the ranked TOP CAREER TRACKS with match scores
     * the SHAP "why was this recommended?" breakdown
     * SKILL GAPS and SUGGESTED ACTIONS
-    * PALAWAN internship / employment destinations
+    * PALAWAN INTERNSHIP / EMPLOYMENT DESTINATIONS
 
 Nothing here invents information. Every number traces back to a grade, a
 certificate or a self-reported skill, which is the property that makes the
@@ -120,19 +120,13 @@ class StudentReport:
         # ---------------------------------------------------- explanation ---
         out += ["  WHY WAS THIS RECOMMENDED?  (SHAP explanation)", thin]
         if self.explanation is not None:
-            out.append(f"    Base rate for '{self.predicted_category}' "
-                       f"= {self.explanation.base_value:+.3f} log-odds; the features below "
-                       f"moved it.")
+            # The prose is generated from the SHAP values themselves
+            # (explain.narrate_student), so every clause carries the
+            # contribution that produced it. The signed table behind these
+            # sentences is in the JSON report and the local SHAP figure.
             out.append("")
-            for _, row in self.explanation.top_positive(5).iterrows():
-                out.append(f"      {row['pretty_name']:<48} {row['shap_value']:+.3f}  "
-                           f"{'#' * int(min(abs(row['shap_value']) * 40, 24))}")
-            negatives = self.explanation.top_negative(3)
-            if len(negatives):
-                out.append("")
-                out.append("    Pushing AWAY from this category:")
-                for _, row in negatives.iterrows():
-                    out.append(f"      {row['pretty_name']:<48} {row['shap_value']:+.3f}")
+            out.append(xai.format_sentences(self.explanation.narrative(),
+                                            width=width - 2, indent=4))
         else:
             out.append("    (SHAP unavailable - install the `shap` package for this section.)")
 
@@ -219,6 +213,17 @@ class StudentReport:
                      "value": round(float(r["raw_value"]), 3)}
                     for _, r in self.explanation.contributions.head(8).iterrows()
                 ] if self.explanation is not None else []
+            ),
+            # The same SHAP output as sentences, for any front end that wants
+            # to show the explanation rather than plot it.
+            "shap_narrative": (
+                self.explanation.narrative() if self.explanation is not None else []
+            ),
+            "shap_additivity": (
+                {"base_value": round(self.explanation.base_value, 4),
+                 "sum_of_contributions": round(self.explanation.total_contribution(), 4),
+                 "margin": round(self.explanation.margin(), 4)}
+                if self.explanation is not None else {}
             ),
             "skill_gaps": [
                 {"competency": g.label, "current": g.current, "role_weight": g.weight}

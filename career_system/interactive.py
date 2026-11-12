@@ -355,8 +355,8 @@ def print_next_steps(report) -> None:
         f"The model places you in the {report.predicted_category.upper()} work "
         f"category with {report.confidence:.1%} confidence, and the closest "
         f"illustrative role inside it is {top.name} at a {top.match_percent:.1f}% "
-        f"match. The SHAP section above lists the specific grades, credentials "
-        f"and skills that moved the prediction.",
+        f"match. The SHAP section above says, in order, which grades, "
+        f"credentials and skills moved that prediction and by how much.",
         width=WIDTH - 4, initial_indent="    ", subsequent_indent="    "))
     print()
     print(textwrap.fill(

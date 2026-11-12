@@ -174,19 +174,16 @@ def cmd_explain(args) -> None:
     top = importance.head(15)[["Feature", "Overall"] + classes]
     print(top.to_string(index=False, float_format=lambda v: f"{v:.4f}", max_colwidth=46))
 
-    print("\n  Interpretation for curriculum review (PSU-CS):")
-    leader = importance.iloc[0]
-    print(f"    The single strongest predictor is '{leader['Feature']}'.")
-    grouped = {}
-    for raw_feature, row in importance.iterrows():
-        key = xai._feature_group(raw_feature)
-        grouped[key] = grouped.get(key, 0.0) + float(row["Overall"])
-    for group, total in sorted(grouped.items(), key=lambda kv: kv[1], reverse=True)[:4]:
-        print(f"    {group:<38} total influence {total:.3f}")
+    # Read straight off the SHAP values: which features the model leans on,
+    # in which direction, and how the influence splits across kinds of
+    # evidence. This is the paragraph curriculum review actually quotes.
+    print("\n  Interpretation for curriculum review (PSU-CS):\n")
+    print(xai.format_sentences(xai.narrate_global(bundle), width=76, indent=4))
 
     step("Writing SHAP figures")
     written = {
         "importance_table": xai.save_importance_table(bundle),
+        "narrative": xai.save_global_narrative(bundle),
         "fig_global": xai.plot_global_importance(bundle, top_n=args.top_n),
         "fig_grouped": xai.plot_signal_importance(bundle),
     }
