@@ -246,15 +246,17 @@ def plot_signal_importance(bundle: ShapBundle, outdir=None):
 
 
 def _feature_group(feature: str) -> str:
-    if feature.startswith("grade_"):
-        return "Core course grades"
+    if feature.startswith("acad_") or feature.startswith("grade_"):
+        return "Core course grades (by domain)"
     if feature.startswith("tech_"):
         return "Technical skills (self-reported)"
     if feature.startswith("hard_"):
         return "Hard skills (self-reported)"
     if feature.startswith("soft_"):
         return "Soft skills (self-reported)"
-    if feature.startswith("cert_"):
+    if feature.startswith("cert_type_"):
+        return "Credential types (seminar / workshop / exam)"
+    if feature.startswith("cert_") or feature == "has_certification":
         return "Professional certifications"
     if feature.startswith("sig_"):
         return "Competency signals (engineered)"
@@ -264,6 +266,8 @@ def _feature_group(feature: str) -> str:
         return "Expectancy-Value score (engineered)"
     if feature in ("gwa_points", "core_grade_mean", "core_grade_std"):
         return "Academic averages"
+    if feature.endswith("_count"):
+        return "Profile breadth counts (engineered)"
     return "Other"
 
 

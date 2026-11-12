@@ -6,6 +6,7 @@ Command line interface.
     python main.py train              XGBoost vs LogReg vs ZeroR (SOP 2)
     python main.py explain            SHAP global feature importance (SOP 4)
     python main.py recommend          one student's full report (SOP 3)
+    python main.py predict            answer the questionnaire yourself
     python main.py batch              cohort-wide recommendation export
     python main.py ablation           does the feature engineering actually help?
     python main.py tune               randomised hyperparameter search
@@ -29,6 +30,8 @@ from . import config as cfg
 from . import data_generator as dg
 from . import explain as xai
 from . import features as feat
+from . import interactive as ui
+from . import labelling
 from . import models as mdl
 from . import profiling
 from . import recommender as rec
@@ -61,16 +64,20 @@ def load_dataset(path=None, required: bool = True) -> pd.DataFrame:
     return df
 
 
+def shown_path(path) -> str:
+    """Project-relative when it is inside the project, absolute when it is not."""
+    try:
+        return str(Path(path).relative_to(cfg.PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def report_written(paths: dict) -> None:
     print("\n  Files written:")
     for label, path in paths.items():
         if label.startswith("_"):
             continue
-        try:
-            shown = Path(path).relative_to(cfg.PROJECT_ROOT)
-        except ValueError:
-            shown = path
-        print(f"    {shown}")
+        print(f"    {shown_path(path)}")
 
 
 # --------------------------------------------------------------------------- #
@@ -93,7 +100,7 @@ def cmd_generate_data(args) -> pd.DataFrame:
 
     print()
     print(dg.describe_dataset(df))
-    print(f"\n  Saved to {path.relative_to(cfg.PROJECT_ROOT)}")
+    print(f"\n  Saved to {shown_path(path)}")
 
     bm.plot_class_distribution(df)
     print(f"  Figure   outputs/figures/class_distribution.png")
@@ -193,12 +200,7 @@ def cmd_recommend(args) -> None:
     df = load_dataset(args.data)
 
     step("Preparing the recommendation model")
-    try:
-        recommender = rec.CareerRecommender.load(tag=args.tag)
-        print("  Loaded the previously trained model from outputs/models/")
-    except FileNotFoundError:
-        print("  No saved model found - training a fresh one on the full cohort")
-        recommender = rec.CareerRecommender.fit_new(df, random_state=args.seed)
+    recommender = _load_recommender(args, df)
 
     if args.student_id:
         matches = df[df["student_id"] == args.student_id]
@@ -217,6 +219,87 @@ def cmd_recommend(args) -> None:
         written = rec.save_report(report)
         if report.explanation is not None:
             written["figure"] = xai.plot_local_explanation(report.explanation)
+        report_written(written)
+
+
+def _load_recommender(args, df=None):
+    """The fitted model, from disk if a previous run saved one."""
+    try:
+        recommender = rec.CareerRecommender.load(tag=args.tag)
+        print("  Loaded the previously trained model from outputs/models/")
+        return recommender
+    except FileNotFoundError:
+        pass
+
+    if df is None:
+        df = load_dataset(getattr(args, "data", None))
+    print("  No saved model found - training a fresh one on the full cohort")
+    return rec.CareerRecommender.fit_new(df, random_state=args.seed)
+
+
+def cmd_predict(args, recommender=None) -> None:
+    """Answer the questionnaire as yourself and get the model's verdict."""
+    banner("TEST YOUR OWN PROFILE - INTERACTIVE CAREER CATEGORY PREDICTION")
+
+    if args.answers:
+        record = ui.load_answers(args.answers)
+        print(f"\n  Replaying the answers in {args.answers}")
+    else:
+        try:
+            record = ui.run_questionnaire(student_id=args.student_id or "YOU")
+        except ui.Abort as exc:
+            if str(exc) == "no more input":
+                print("\n\n[!] Ran out of input before the questionnaire finished.")
+                print("    `predict` reads answers from the terminal. To run it without")
+                print("    one, save the answers once and replay them:")
+                print("        python main.py predict --save-answers me.json")
+                print("        python main.py predict --answers me.json")
+                return
+            print("\n  Cancelled. Nothing was saved.")
+            return
+
+    if args.save_answers:
+        ui.save_answers(record, args.save_answers)
+        print(f"\n  Answers saved to {args.save_answers}")
+
+    ui.print_answer_summary(record)
+
+    frame = ui.record_to_frame(record)
+
+    if recommender is None:
+        step("Preparing the recommendation model")
+        recommender = _load_recommender(args)
+
+    # The Chapter IV rubric, scored on these answers. Shown next to the model so
+    # a panelist can see where the two agree and where they do not.
+    rubric = labelling.rubric_scores(frame).iloc[0].sort_values(ascending=False)
+
+    step("Scoring your profile")
+    report = recommender.recommend(frame.iloc[0], top_n=args.top_n)
+    print("\n" + report.render())
+
+    print("\n  CHAPTER IV LABELLING RUBRIC, FOR COMPARISON")
+    print("  " + "-" * 74)
+    print("    Core courses 30%  |  GWA 20%  |  Certifications 25%  |  Skills 25%")
+    for category, score in rubric.items():
+        if pd.isna(score):
+            continue
+        bar = "#" * int(round(score / 100 * 34))
+        print(f"      {category:<12} {score:5.1f}  {bar}")
+    rubric_pick = rubric.idxmax()
+    if rubric_pick == report.predicted_category:
+        print(f"\n    The rubric and the model agree on '{rubric_pick}'.")
+    else:
+        print(f"\n    The rubric scores '{rubric_pick}' highest while the model "
+              f"predicts\n    '{report.predicted_category}'. Disagreement means the "
+              f"model has learned something\n    the flat weighted average does not "
+              f"capture -- or that this profile sits\n    near a boundary. Chapter IV "
+              f"sends exactly these cases to the adviser.")
+
+    ui.print_next_steps(report)
+
+    if args.save_report:
+        written = rec.save_report(report)
         report_written(written)
 
 
@@ -337,7 +420,7 @@ def cmd_run_all(args) -> None:
         cmd_generate_data(args)
     else:
         source = Path(args.data) if args.data else cfg.DATASET_PATH
-        print(f"\n  Using the existing dataset at {source.relative_to(cfg.PROJECT_ROOT)} "
+        print(f"\n  Using the existing dataset at {shown_path(source)} "
               f"({len(existing)} students).")
         print("  Pass --regenerate to build a fresh one.")
 
@@ -357,6 +440,16 @@ def cmd_run_all(args) -> None:
     print("  engineering actually helps, and `python main.py tune` before you")
     print("  finalise the model on real data.")
 
+    # The model is trained; now let whoever is watching put their own profile
+    # through it. This is the demonstration a panelist asks for.
+    if not args.no_interactive and ui.offer(
+        "The model is trained. Answer the questionnaire yourself and see "
+        "which work\n  category it places you in?"
+    ):
+        cmd_predict(args)
+    elif not args.no_interactive:
+        print("\n  To try it yourself later: python main.py predict")
+
 
 # --------------------------------------------------------------------------- #
 # Argument parsing
@@ -373,6 +466,7 @@ def build_parser() -> argparse.ArgumentParser:
               python main.py train --feature-set core
               python main.py train --no-smote             show what SMOTE is worth
               python main.py recommend --student-id PSU-0007
+              python main.py predict                      answer the form yourself
               python main.py ablation
         """),
     )
@@ -414,6 +508,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--top-n", type=int, default=3, help="career tracks to show (default: 3)")
     p.set_defaults(func=cmd_recommend)
 
+    p = common(sub.add_parser(
+        "predict", help="answer the questionnaire yourself and get a prediction"))
+    p.add_argument("--student-id", default="YOU", help="label for the report (default: YOU)")
+    p.add_argument("--top-n", type=int, default=3, help="career tracks to show (default: 3)")
+    p.add_argument("--answers", help="replay a saved JSON answer file instead of asking")
+    p.add_argument("--save-answers", help="write the answers to a JSON file")
+    p.add_argument("--save-report", action="store_true",
+                   help="also write the report to outputs/reports/")
+    p.set_defaults(func=cmd_predict)
+
     p = common(sub.add_parser("batch", help="recommendation export for the whole cohort"))
     p.add_argument("--top-n", type=int, default=3)
     p.set_defaults(func=cmd_batch)
@@ -439,6 +543,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--count", type=int, default=1)
     p.add_argument("--max-samples", type=int, default=400)
     p.add_argument("--student-id", default=None)
+    p.add_argument("--answers", default=None)
+    p.add_argument("--save-answers", default=None)
+    p.add_argument("--save-report", action="store_true")
+    p.add_argument("--no-interactive", action="store_true",
+                   help="skip the 'test your own profile' prompt at the end")
     p.add_argument("--regenerate", action="store_true", help="rebuild the dataset even if one exists")
     p.set_defaults(func=cmd_run_all)
 

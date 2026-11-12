@@ -36,94 +36,154 @@ def academic_profile(df: pd.DataFrame) -> pd.DataFrame:
 
     Reported in raw grades (not points) because that is what appears on a
     transcript and what a panelist will recognise. Remember: LOWER IS BETTER.
+
+    BSCS and BSIT answered different course lists, so each course is reported
+    only for the program that sat it. The `acad_*` domain scores below are what
+    make the two programs comparable.
     """
     rows = []
-    for course in cfg.CORE_COURSES:
-        column = f"grade_{course.key}"
-        series = df[column].astype(float)
-        row = {
-            "Course code": course.code,
+    for course in cfg.ALL_COURSES:
+        series = pd.to_numeric(
+            df.loc[df["program"] == course.program, course.column], errors="coerce"
+        ).dropna()
+        if series.empty:
+            rows.append({
+                "Program": course.program,
+                "Course": course.title,
+                "Domain": ", ".join(cfg.ACADEMIC_DOMAINS[d] for d in course.domains) or "(elective)",
+                "N reported": 0,
+                "Mean grade": np.nan,
+                "Std dev": np.nan,
+                "Best": np.nan,
+                "Lowest": np.nan,
+            })
+            continue
+        rows.append({
+            "Program": course.program,
             "Course": course.title,
-            "Year": course.year_level,
+            "Domain": ", ".join(cfg.ACADEMIC_DOMAINS[d] for d in course.domains) or "(elective)",
+            "N reported": int(series.size),
             "Mean grade": round(series.mean(), 3),
             "Std dev": round(series.std(), 3),
             "Best": round(series.min(), 2),
             "Lowest": round(series.max(), 2),
-        }
-        for program in cfg.PROGRAMS:
-            subset = df.loc[df["program"] == program, column].astype(float)
-            row[f"{program} mean"] = round(subset.mean(), 3) if len(subset) else np.nan
-        rows.append(row)
+        })
 
     frame = pd.DataFrame(rows)
 
-    gwa = df["gwa"].astype(float)
+    gwa = pd.to_numeric(df["gwa"], errors="coerce")
     summary = {
-        "Course code": "--",
+        "Program": "BOTH",
         "Course": "CUMULATIVE GWA",
-        "Year": "1-3",
+        "Domain": "--",
+        "N reported": int(gwa.notna().sum()),
         "Mean grade": round(gwa.mean(), 3),
         "Std dev": round(gwa.std(), 3),
         "Best": round(gwa.min(), 2),
         "Lowest": round(gwa.max(), 2),
     }
-    for program in cfg.PROGRAMS:
-        subset = df.loc[df["program"] == program, "gwa"].astype(float)
-        summary[f"{program} mean"] = round(subset.mean(), 3) if len(subset) else np.nan
-
     return pd.concat([frame, pd.DataFrame([summary])], ignore_index=True)
 
 
-def certification_profile(df: pd.DataFrame) -> pd.DataFrame:
+def domain_profile(df: pd.DataFrame) -> pd.DataFrame:
+    """Mean grade POINTS per shared academic domain, by program.
+
+    This is the table to read alongside the per-course one: it is the only view
+    in which a BSCS and a BSIT profile are measured on the same ruler, and it is
+    what the classifier actually sees.
+    """
+    engineered = feat.add_grade_points(df)
     rows = []
-    for domain in cfg.CERT_DOMAINS:
-        column = f"cert_{domain}"
-        series = df[column].astype(float)
-        holders = int(series.sum())
+    for domain, label in cfg.ACADEMIC_DOMAINS.items():
+        column = f"acad_{domain}"
+        series = engineered[column]
+        row = {
+            "Academic domain": label,
+            "Cohort mean (points)": round(series.mean(), 2),
+            "Std dev": round(series.std(), 2),
+        }
+        for program in cfg.PROGRAMS:
+            subset = engineered.loc[engineered["program"] == program, column]
+            row[f"{program} mean"] = round(subset.mean(), 2) if len(subset) else np.nan
+            row[f"{program} courses"] = len(cfg.domain_courses(program, domain))
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values("Cohort mean (points)", ascending=False)
+
+
+def certification_profile(df: pd.DataFrame) -> pd.DataFrame:
+    """Part III of the questionnaire: who holds what, and of what kind."""
+    rows = []
+    answered = pd.to_numeric(df["has_certification"], errors="coerce")
+    holders = int(answered.sum())
+    rows.append({
+        "Item": "Q7: holds any credential",
+        "Students": holders,
+        "Share of cohort": f"{holders / max(answered.notna().sum(), 1):.1%}",
+        "Detail": "seminars, workshops, webinars, training or certification exams",
+    })
+
+    for key, label in cfg.CERTIFICATION_TYPES.items():
+        series = pd.to_numeric(df[f"cert_type_{key}"], errors="coerce")
+        count = int(series.sum())
         rows.append({
-            "Certification domain": domain.replace("_", " ").title(),
-            "Students holding": holders,
-            "Share of cohort": f"{holders / series.notna().sum():.1%}",
-            "Example credentials": ", ".join(cfg.CERTIFICATION_DOMAINS[domain][:2]),
+            "Item": f"Q9 type: {label}",
+            "Students": count,
+            "Share of cohort": f"{count / max(series.notna().sum(), 1):.1%}",
+            "Detail": "",
         })
 
-    frame = pd.DataFrame(rows).sort_values("Students holding", ascending=False)
+    for domain in cfg.CERT_DOMAINS:
+        series = pd.to_numeric(df[f"cert_{domain}"], errors="coerce")
+        count = int(series.sum())
+        rows.append({
+            "Item": f"Q8 subject: {domain.replace('_', ' ').title()}",
+            "Students": count,
+            "Share of cohort": f"{count / max(series.notna().sum(), 1):.1%}",
+            "Detail": ", ".join(cfg.CERTIFICATION_DOMAINS[domain][:2]),
+        })
 
     engineered = feat.add_aggregate_features(df)
     total = engineered["cert_count"]
-    footer = pd.DataFrame([{
-        "Certification domain": "-- certificates per student --",
-        "Students holding": f"mean {total.mean():.2f}",
+    rows.append({
+        "Item": "-- subject domains per student --",
+        "Students": f"mean {total.mean():.2f}",
         "Share of cohort": f"max {int(total.max())}",
-        "Example credentials": f"{int((total == 0).sum())} students hold none",
-    }])
-    return pd.concat([frame, footer], ignore_index=True)
+        "Detail": f"{int((total == 0).sum())} students match no recognised subject domain",
+    })
+    return pd.DataFrame(rows)
 
 
 def skill_profile(df: pd.DataFrame) -> pd.DataFrame:
-    """Mean self-reported Likert score for every skill, overall and by program."""
+    """Share of the cohort that ticked each Part IV checkbox, overall and by program.
+
+    Objective 1 asks for "the percentage distribution of technical skills within
+    the consolidated graduating computing cohort", which is exactly this table.
+    """
     rows = []
-    groups = (
-        ("Technical", cfg.TECH_SKILL_KEYS),
-        ("Hard", cfg.HARD_SKILL_KEYS),
-        ("Soft", cfg.SOFT_SKILL_KEYS),
-    )
-    for group_label, keys in groups:
-        for column in keys:
-            series = df[column].astype(float)
+    for group, skills in cfg.SKILL_GROUPS.items():
+        for skill in skills:
+            column = f"{group}_{skill.key}"
+            series = pd.to_numeric(df[column], errors="coerce")
+            answered = int(series.notna().sum())
+            ticked = int(series.sum())
             row = {
-                "Group": group_label,
-                "Skill": cfg.pretty_feature_name(column).rsplit(" (", 1)[0],
-                "Mean (1-5)": round(series.mean(), 2),
-                "Std dev": round(series.std(), 2),
-                "% rating 4 or 5": f"{(series >= 4).sum() / series.notna().sum():.1%}",
+                "Group": cfg.SKILL_GROUP_LABELS[group],
+                "Skill": skill.label,
+                "Questionnaire item": skill.prompt,
+                "Students who ticked": ticked,
+                "% of cohort": round(100.0 * ticked / max(answered, 1), 1),
             }
             for program in cfg.PROGRAMS:
-                subset = df.loc[df["program"] == program, column].astype(float)
-                row[f"{program} mean"] = round(subset.mean(), 2) if len(subset) else np.nan
+                subset = pd.to_numeric(
+                    df.loc[df["program"] == program, column], errors="coerce"
+                )
+                row[f"{program} %"] = (
+                    round(100.0 * subset.sum() / max(int(subset.notna().sum()), 1), 1)
+                    if len(subset) else np.nan
+                )
             rows.append(row)
 
-    return pd.DataFrame(rows).sort_values(["Group", "Mean (1-5)"], ascending=[True, False])
+    return pd.DataFrame(rows).sort_values(["Group", "% of cohort"], ascending=[True, False])
 
 
 def riasec_profile(df: pd.DataFrame) -> pd.DataFrame:
@@ -152,21 +212,22 @@ def riasec_profile(df: pd.DataFrame) -> pd.DataFrame:
 # Figures
 # --------------------------------------------------------------------------- #
 def plot_skill_means(df: pd.DataFrame, outdir=None):
+    """Percentage of the cohort that ticked each Part IV skill checkbox."""
     outdir = outdir or cfg.FIGURE_DIR
-    profile = skill_profile(df).sort_values("Mean (1-5)")
+    profile = skill_profile(df).sort_values("% of cohort")
 
-    colours = {"Technical": "#2563eb", "Hard": "#f59e0b", "Soft": "#10b981"}
-    fig, ax = plt.subplots(figsize=(9, 0.30 * len(profile) + 2.0))
-    bars = ax.barh(profile["Skill"], profile["Mean (1-5)"],
+    colours = {"Technical skill": "#2563eb", "Hard skill": "#f59e0b", "Soft skill": "#10b981"}
+    fig, ax = plt.subplots(figsize=(9, 0.34 * len(profile) + 2.0))
+    bars = ax.barh(profile["Skill"], profile["% of cohort"],
                    color=[colours[g] for g in profile["Group"]], edgecolor="white", height=0.72)
-    ax.bar_label(bars, fmt="%.2f", padding=3, fontsize=8)
+    ax.bar_label(bars, fmt="%.1f%%", padding=3, fontsize=8)
 
-    ax.axvline(3.0, ls="--", lw=1, color="#64748b")
-    ax.text(3.02, -0.6, "neutral (3.0)", fontsize=8, color="#64748b")
-    ax.set_xlim(0, 5.4)
-    ax.set_xlabel("Mean self-reported proficiency (1 = very low, 5 = very high)")
+    ax.axvline(50.0, ls="--", lw=1, color="#64748b")
+    ax.text(50.8, -0.6, "half the cohort", fontsize=8, color="#64748b")
+    ax.set_xlim(0, 108)
+    ax.set_xlabel("Share of respondents who ticked the box (%)")
     ax.set_title("Self-Reported Skill Profile of the Cohort\n"
-                 "Technical, hard and soft skills as reported by fourth-year BSCS/BSIT students")
+                 "Part IV checkboxes: technical, hard and soft skills students have actually used")
 
     handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in colours.values()]
     ax.legend(handles, colours.keys(), title="Skill group", frameon=False, loc="lower right")
@@ -257,6 +318,7 @@ def run_profiling(df: pd.DataFrame, verbose: bool = True) -> dict:
     """Build every descriptive table and figure; return the paths written."""
     tables = {
         "profile_academic": academic_profile(df),
+        "profile_academic_domains": domain_profile(df),
         "profile_certifications": certification_profile(df),
         "profile_skills": skill_profile(df),
         "profile_riasec": riasec_profile(df),
@@ -276,21 +338,24 @@ def run_profiling(df: pd.DataFrame, verbose: bool = True) -> dict:
     written["figure_gwa"] = plot_gwa_distribution(df)
 
     if verbose:
-        print("\n  Academic profile (raw 1.00-5.00 grades, lower is better)")
+        print("\n  Academic profile by shared domain (0-100 points, higher is better)")
         print("  " + "-" * 74)
-        academic = tables["profile_academic"][["Course", "Mean grade", "BSCS mean", "BSIT mean"]]
-        print(academic.to_string(index=False, max_colwidth=44))
+        print(tables["profile_academic_domains"][
+            ["Academic domain", "Cohort mean (points)", "BSCS mean", "BSIT mean"]
+        ].to_string(index=False, max_colwidth=42))
+        print("    Per-course grades on the 1.00-5.00 transcript scale are in")
+        print("    outputs/tables/profile_academic.csv, listed per prospectus.")
 
-        print("\n  Certification profile")
+        print("\n  Certifications, seminars and training (Part III)")
         print("  " + "-" * 74)
         print(tables["profile_certifications"][
-            ["Certification domain", "Students holding", "Share of cohort"]
-        ].to_string(index=False))
+            ["Item", "Students", "Share of cohort"]
+        ].head(14).to_string(index=False))
 
-        print("\n  Top self-reported skills")
+        print("\n  Most commonly ticked skills (Part IV)")
         print("  " + "-" * 74)
-        skills = tables["profile_skills"].sort_values("Mean (1-5)", ascending=False).head(10)
-        print(skills[["Group", "Skill", "Mean (1-5)", "% rating 4 or 5"]].to_string(index=False))
+        skills = tables["profile_skills"].sort_values("% of cohort", ascending=False).head(10)
+        print(skills[["Group", "Skill", "% of cohort", "BSCS %", "BSIT %"]].to_string(index=False))
 
         alignment = tables["profile_degree_alignment"]
         matched = alignment["aligned_with_enrolment"].sum()

@@ -146,11 +146,15 @@ WRITE_IN_MAP = {
     "reporting and presentation": "skill_soft_communication",
 }
 
+# Q9 of the questionnaire. Every option the form offers gets a column, even
+# when nobody in this batch picked it -- otherwise the next batch silently
+# loses that answer. config.CERTIFICATION_TYPES holds the same five.
 CERT_TYPES = [
     (r"certification examination", "cert_type_certification_exam"),
     (r"technical seminar", "cert_type_technical_seminar"),
     (r"workshop", "cert_type_workshop"),
     (r"training program", "cert_type_training_program"),
+    (r"webinar", "cert_type_webinar"),
 ]
 
 STATUS_MAP = {

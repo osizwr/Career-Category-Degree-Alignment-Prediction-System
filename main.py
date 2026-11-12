@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-PSU Career Category & Degree Alignment System - entry point.
+PSU Explainable Career Category Recommendation System - entry point.
 
-    Predictive Modeling of Career Category and Degree Alignment for CS and IT
-    Students Using Ensemble and Baseline Classifiers
+    An Explainable Career Category Recommendation System for Computer Science
+    and Information Technology Graduating Students using Ensemble and Baseline
+    Classifiers
 
     Cajilo, M. J. M. | Donghil, Z. B. | Mahinay, J. V. | Sibayan, G. P. U.
     College of Sciences, Palawan State University
 
 Quick start
 -----------
-    python main.py                    run the whole pipeline
+    python main.py                    run the whole pipeline, then offer to
+                                      predict your own career category
+    python main.py predict            answer the questionnaire yourself
     python main.py --help             list every command
 
 Individual steps
@@ -20,9 +23,16 @@ Individual steps
     python main.py train              XGBoost vs LogReg vs ZeroR    (SOP 2)
     python main.py explain            SHAP feature importance       (SOP 4)
     python main.py recommend          one student's full report     (SOP 3)
+    python main.py predict            interactive: your own profile
     python main.py batch              cohort-wide export
     python main.py ablation           test the feature engineering
     python main.py tune               hyperparameter search
+
+Running on the real cohort
+--------------------------
+    python scripts/clean_real_data.py       Google Forms export -> clean CSV
+    python scripts/build_model_dataset.py   clean CSV -> model schema
+    python main.py --data data/real-cohort-model.csv
 """
 
 import sys

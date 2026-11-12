@@ -1,14 +1,15 @@
 """
-Synthetic dataset generator for the PSU Career Category & Degree Alignment System.
+Synthetic dataset generator for the PSU Career Category Recommendation System.
 
 WHY THIS EXISTS
 ---------------
 The thesis collects data from active fourth-year BSCS/BSIT students during the
-first semester of AY 2026-2027. Until that collection happens there is no real
-data, so this module manufactures a cohort that is *shaped* like the real one:
-the same columns, the same 1.00-5.00 grading scale, the same Likert skill
-inventories, and a deliberately imbalanced work-category distribution so that
-SMOTE and the ZeroR baseline have something real to do.
+first semester of AY 2026-2027. Until that collection finishes there is not
+enough data to train on, so this module manufactures a cohort that is *shaped*
+like the real one: the two separate prospectuses, the same 1.00-5.00 grading
+scale, the same binary skill checkboxes, the same yes/no certification block,
+and a deliberately imbalanced work-category distribution so that SMOTE and the
+ZeroR baseline have something real to do.
 
 HOW THE LABELS ARE MADE  (read this before you defend the numbers)
 ------------------------------------------------------------------
@@ -30,6 +31,11 @@ Two consequences you must state honestly in Chapter V:
      Supervisory and Managerial categories deliberately overlap, which is why
      they are the confusable pair in the confusion matrix -- exactly what you
      would expect from real data.
+
+Note that this is a DIFFERENT labelling rule from the one in
+`career_system/labelling.py`. That module reproduces the Chapter IV rubric and
+is deterministic; this one adds noise on purpose, so the synthetic benchmark
+does not report a meaningless 100%.
 
 Replace this whole module's output with the real Google Forms export once
 collection is done; nothing downstream needs to change.
@@ -89,7 +95,7 @@ CATEGORY_UTILITY: dict[str, dict[str, float]] = {
         "sig_communication_service": 0.60,
         "sig_infrastructure_support": 0.40,
         "sig_systems_engineering": 0.40,
-        "seminar_units": 0.30,
+        "cert_type_count": 0.30,
         "sig_documentation_clerical": -0.20,
     },
     "Managerial": {
@@ -109,10 +115,11 @@ UTILITY_STRENGTH = 1.15
 
 
 # --------------------------------------------------------------------------- #
-# How each course's domain responds to the latent traits
+# How each academic domain responds to the latent traits
 # --------------------------------------------------------------------------- #
-# (technical, people, detail) loading per competency domain.
+# (technical, people, detail) loading per academic domain.
 _DOMAIN_TRAIT_LOADING = {
+    "foundations":            (0.55, 0.15, 0.40),
     "programming":            (1.00, 0.00, 0.05),
     "theory_analytics":       (0.90, 0.00, 0.15),
     "data_management":        (0.60, 0.00, 0.45),
@@ -121,65 +128,68 @@ _DOMAIN_TRAIT_LOADING = {
     "web_design":             (0.70, 0.15, 0.10),
     "systems_engineering":    (0.60, 0.30, 0.30),
     "infrastructure_support": (0.80, 0.05, 0.15),
-    "documentation_clerical": (0.05, 0.20, 1.00),
-    "leadership_management":  (0.05, 1.00, 0.15),
-    "communication_service":  (0.00, 1.00, 0.10),
+    "professional_practice":  (0.05, 0.95, 0.25),
 }
 
-# Programme-specific curricular emphasis (CMO No. 25 s.2015).
-_PROGRAM_COURSE_BONUS = {
+# Programme-specific curricular emphasis (CMO No. 25 s.2015 + the two PSU
+# prospectuses): BSCS students do better in the theory-heavy domains, BSIT
+# students in the applied infrastructure ones.
+_PROGRAM_DOMAIN_BONUS = {
     "BSCS": {"programming": 3.5, "theory_analytics": 4.0, "systems_engineering": 1.5},
     "BSIT": {"networking": 4.0, "infrastructure_support": 3.5, "security": 3.0,
              "data_management": 2.0, "web_design": 2.0},
 }
 
-# Which latent trait drives each self-reported skill, and how strongly.
+# Which latent trait drives each self-reported checkbox, and how strongly,
+# together with the share of the cohort expected to tick it.
 _SKILL_TRAIT_LOADING = {
-    # technical skills -> technical inclination
-    "tech_programming":            (1.00, 0.00, 0.00),
-    "tech_web_development":        (0.75, 0.10, 0.00),
-    "tech_database_management":    (0.65, 0.00, 0.45),
-    "tech_networking":             (0.90, 0.00, 0.10),
-    "tech_cybersecurity":          (0.85, 0.00, 0.15),
-    "tech_data_analytics":         (0.80, 0.00, 0.35),
-    "tech_systems_administration": (0.85, 0.05, 0.15),
-    "tech_mobile_development":     (0.75, 0.00, 0.00),
-    "tech_cloud_computing":        (0.70, 0.05, 0.05),
-    "tech_technical_troubleshooting": (0.80, 0.10, 0.10),
-    # hard skills -> split between detail orientation and technique
-    "hard_documentation":            (0.05, 0.20, 1.00),
-    "hard_technical_writing":        (0.25, 0.25, 0.85),
-    "hard_data_encoding":            (0.00, 0.10, 1.00),
-    "hard_office_productivity":      (0.10, 0.20, 0.90),
-    "hard_systems_analysis":         (0.60, 0.30, 0.40),
-    "hard_project_management":       (0.15, 0.90, 0.35),
-    "hard_quality_assurance_testing": (0.50, 0.15, 0.60),
-    # soft skills -> people inclination
-    "soft_communication":   (0.00, 1.00, 0.10),
-    "soft_teamwork":        (0.05, 0.90, 0.10),
-    "soft_leadership":      (0.00, 1.00, 0.05),
-    "soft_problem_solving": (0.70, 0.20, 0.20),
-    "soft_adaptability":    (0.10, 0.65, 0.15),
-    "soft_time_management": (0.10, 0.45, 0.60),
-    "soft_critical_thinking": (0.65, 0.20, 0.30),
-    "soft_customer_service":  (0.00, 0.95, 0.15),
+    "tech_programming":          ((1.00, 0.00, 0.00), 0.72),
+    "tech_web_mobile_dev":       ((0.80, 0.10, 0.00), 0.55),
+    "tech_database_sql":         ((0.65, 0.00, 0.45), 0.60),
+    "tech_networking":           ((0.90, 0.00, 0.10), 0.38),
+    "tech_it_support":           ((0.70, 0.20, 0.15), 0.52),
+    "hard_data_analysis":        ((0.80, 0.00, 0.40), 0.45),
+    "hard_graphic_ui_design":    ((0.35, 0.35, 0.30), 0.48),
+    "hard_office_productivity":  ((0.10, 0.20, 0.90), 0.58),
+    "hard_project_management":   ((0.15, 0.90, 0.35), 0.30),
+    "hard_research_writing":     ((0.25, 0.30, 0.85), 0.50),
+    "soft_communication":        ((0.00, 1.00, 0.15), 0.62),
+    "soft_teamwork":             ((0.05, 0.90, 0.10), 0.70),
+    "soft_leadership":           ((0.00, 1.00, 0.05), 0.42),
+    "soft_problem_solving":      ((0.70, 0.20, 0.20), 0.66),
+    "soft_adaptability":         ((0.10, 0.65, 0.15), 0.60),
 }
 
-# Which trait mix makes each certification domain likely.
+# Which trait mix makes each certification SUBJECT domain likely, among the
+# students who hold any credential at all.
 _CERT_TRAIT_LOADING = {
-    "networking":           (1.00, 0.00, 0.10),
-    "security":             (0.95, 0.00, 0.15),
-    "programming":          (1.00, 0.00, 0.05),
-    "data_analytics":       (0.85, 0.05, 0.35),
-    "web_cloud":            (0.80, 0.10, 0.05),
-    "database":             (0.70, 0.00, 0.45),
-    "office_productivity":  (0.05, 0.25, 0.95),
+    "networking":            (1.00, 0.00, 0.10),
+    "security":              (0.95, 0.00, 0.15),
+    "programming":           (1.00, 0.00, 0.05),
+    "data_analytics":        (0.85, 0.05, 0.35),
+    "web_cloud":             (0.80, 0.10, 0.05),
+    "database":              (0.70, 0.00, 0.45),
+    "office_productivity":   (0.05, 0.25, 0.95),
     "leadership_management": (0.00, 1.00, 0.25),
 }
 _CERT_BASE_RATE = {
-    "networking": 0.30, "security": 0.20, "programming": 0.34,
-    "data_analytics": 0.22, "web_cloud": 0.24, "database": 0.20,
-    "office_productivity": 0.38, "leadership_management": 0.30,
+    "networking": 0.22, "security": 0.18, "programming": 0.30,
+    "data_analytics": 0.20, "web_cloud": 0.16, "database": 0.15,
+    "office_productivity": 0.24, "leadership_management": 0.26,
+}
+
+# Q7: has the student completed any credential at all?
+_HAS_CERT_BASE_RATE = 0.55
+
+# Q9: which KIND of credential, among students who hold one. Seminars and
+# webinars dominate in an undergraduate cohort; exam-based certifications are
+# comparatively rare.
+_CERT_TYPE_RATE = {
+    "certification_exam": 0.22,
+    "technical_seminar": 0.62,
+    "workshop": 0.45,
+    "training_program": 0.28,
+    "webinar": 0.50,
 }
 
 
@@ -225,6 +235,14 @@ def _trait_response(traits, loading, rng, n, noise=0.55):
     return raw / norm + rng.normal(0.0, noise, n)
 
 
+def _logistic_draw(rng, response, traits, base_rate, n, slope=0.95):
+    """Bernoulli draw whose marginal rate matches `base_rate`."""
+    intercept = np.log(base_rate / (1.0 - base_rate))
+    logit = intercept + slope * response + 0.35 * traits["general"]
+    prob = 1.0 / (1.0 + np.exp(-logit))
+    return (rng.random(n) < prob).astype(int)
+
+
 def _generate_raw_profiles(rng: np.random.Generator, n_students: int) -> pd.DataFrame:
     traits = _sample_traits(rng, n_students)
 
@@ -235,29 +253,38 @@ def _generate_raw_profiles(rng: np.random.Generator, n_students: int) -> pd.Data
     }
 
     # ------------------------------------------------------------- grades ---
-    grade_points = {}
-    for course in cfg.CORE_COURSES:
+    # Every course is generated, then blanked for the students who are not in
+    # that program -- exactly the shape the real two-prospectus export has.
+    all_points = []
+    for course in cfg.ALL_COURSES:
         loadings = [_DOMAIN_TRAIT_LOADING[d] for d in course.domains if d in _DOMAIN_TRAIT_LOADING]
         if loadings:
             loading = tuple(float(np.mean([l[i] for l in loadings])) for i in range(3))
         else:
-            loading = (0.3, 0.3, 0.3)
+            # IT electives carry no domain: a generic blend of all three traits.
+            loading = (0.45, 0.25, 0.30)
 
         affinity = _trait_response(traits, loading, rng, n_students, noise=0.60)
 
         bonus = np.zeros(n_students)
-        for prog, domain_bonus in _PROGRAM_COURSE_BONUS.items():
+        for prog, domain_bonus in _PROGRAM_DOMAIN_BONUS.items():
             amount = sum(domain_bonus.get(d, 0.0) for d in course.domains)
             bonus += (program == prog) * amount
 
         # 68 points ~ a 2.25 grade; ability and affinity move it up or down.
         points = 68.0 + 11.0 * traits["general"] + 7.5 * affinity + bonus
         points = np.clip(points + rng.normal(0, 4.0, n_students), 5.0, 100.0)
-        grade_points[course.key] = points
-        data[f"grade_{course.key}"] = _round_to_grade_step(points)
 
-    # GWA blends the core courses with unmodelled GE subjects.
-    core_mean_points = np.mean(list(grade_points.values()), axis=0)
+        grades = _round_to_grade_step(points).astype(float)
+        grades[program != course.program] = np.nan
+        data[course.column] = grades
+
+        mine = program == course.program
+        masked = np.where(mine, points, np.nan)
+        all_points.append(masked)
+
+    # GWA blends the student's own courses with unmodelled GE subjects.
+    core_mean_points = np.nanmean(np.vstack(all_points), axis=0)
     gwa_points = np.clip(
         0.75 * core_mean_points + 0.25 * (68.0 + 11.0 * traits["general"])
         + rng.normal(0, 2.5, n_students),
@@ -266,34 +293,44 @@ def _generate_raw_profiles(rng: np.random.Generator, n_students: int) -> pd.Data
     data["gwa"] = _round_to_grade_step(gwa_points)
 
     # ------------------------------------------------------------- skills ---
-    # Each student has a self-report bias: some consistently over-rate
-    # themselves. This is a real source of noise in self-reported instruments.
+    # Each student has a self-report bias: some consistently tick more boxes.
+    # This is a real source of noise in self-reported instruments.
     report_bias = rng.normal(0.0, 0.45, n_students)
 
-    for col, loading in _SKILL_TRAIT_LOADING.items():
-        response = _trait_response(traits, loading, rng, n_students, noise=0.70)
-        latent = 3.05 + 0.80 * response + 0.30 * traits["general"] + report_bias
-        data[col] = np.clip(np.rint(latent), cfg.LIKERT_MIN, cfg.LIKERT_MAX).astype(int)
+    for col, (loading, base_rate) in _SKILL_TRAIT_LOADING.items():
+        response = _trait_response(traits, loading, rng, n_students, noise=0.70) + report_bias
+        data[col] = _logistic_draw(rng, response, traits, base_rate, n_students, slope=0.90)
 
     # ----------------------------------------------------- certifications ---
+    # Q7 first: engagement (people orientation + ability) drives whether the
+    # student has any credential at all. Everything in Q8/Q9 is conditional.
+    engagement = 0.55 * traits["people"] + 0.45 * traits["general"]
+    has_cert = _logistic_draw(rng, engagement, traits, _HAS_CERT_BASE_RATE, n_students, slope=0.80)
+    data["has_certification"] = has_cert
+
     for domain in cfg.CERT_DOMAINS:
         response = _trait_response(traits, _CERT_TRAIT_LOADING[domain], rng, n_students, noise=0.5)
-        # Logistic link centred so the marginal rate matches _CERT_BASE_RATE.
-        base = _CERT_BASE_RATE[domain]
-        intercept = np.log(base / (1 - base))
-        logit = intercept + 0.95 * response + 0.35 * traits["general"]
-        prob = 1.0 / (1.0 + np.exp(-logit))
-        data[f"cert_{domain}"] = (rng.random(n_students) < prob).astype(int)
+        drawn = _logistic_draw(rng, response, traits, _CERT_BASE_RATE[domain], n_students)
+        data[f"cert_{domain}"] = drawn * has_cert
 
-    # Seminar units: driven by engagement (people orientation + ability).
-    lam = np.clip(3.0 + 1.1 * traits["people"] + 0.7 * traits["general"], 0.4, None)
-    data["seminar_units"] = rng.poisson(lam).astype(int)
+    for cert_type, rate in _CERT_TYPE_RATE.items():
+        drawn = (rng.random(n_students) < rate).astype(int)
+        data[f"cert_type_{cert_type}"] = drawn * has_cert
 
-    return pd.DataFrame(data)
+    frame = pd.DataFrame(data)
+
+    # A student who said "yes" must have named at least one kind of credential,
+    # or the record contradicts itself the way a real cleaning log would flag.
+    type_cols = list(cfg.CERT_TYPE_KEYS)
+    empty = (frame["has_certification"] == 1) & (frame[type_cols].sum(axis=1) == 0)
+    frame.loc[empty, "cert_type_technical_seminar"] = 1
+
+    return frame
 
 
 def _zscore(series: pd.Series) -> np.ndarray:
-    values = series.to_numpy(dtype=float)
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+    values = np.nan_to_num(values, nan=np.nanmean(values) if np.isfinite(np.nanmean(values)) else 0.0)
     std = values.std()
     if std < 1e-9:
         return np.zeros_like(values)
@@ -350,7 +387,7 @@ def _inject_missing_values(
         return df
 
     out = df.copy()
-    optional = list(cfg.ALL_SKILL_KEYS) + list(cfg.CERT_FEATURE_KEYS) + ["seminar_units"]
+    optional = list(cfg.ALL_SKILL_KEYS) + list(cfg.CERT_FEATURE_KEYS) + list(cfg.CERT_TYPE_KEYS)
     for col in optional:
         mask = rng.random(len(out)) < missing_rate
         if mask.any():
@@ -389,7 +426,7 @@ def generate_dataset(
     return raw[list(feat.RAW_COLUMNS)]
 
 
-def save_dataset(df: pd.DataFrame, path=None) -> "Path":
+def save_dataset(df: pd.DataFrame, path=None):
     from pathlib import Path
 
     path = Path(path) if path else cfg.DATASET_PATH
@@ -400,15 +437,24 @@ def save_dataset(df: pd.DataFrame, path=None) -> "Path":
 
 def describe_dataset(df: pd.DataFrame) -> str:
     """Human-readable summary used by the CLI and by Chapter V profiling."""
+    # Blanks in the other program's prospectus are by design, not missing data.
+    structural = sum(
+        int((df["program"] != course.program).sum()) for course in cfg.ALL_COURSES
+    )
     lines = [
         f"Students            : {len(df)}",
         f"Columns             : {len(df.columns)}",
-        f"Programs            : " + ", ".join(
+        "Programs            : " + ", ".join(
             f"{k}={v}" for k, v in df['program'].value_counts().items()
         ),
+        f"Course grade slots  : {len(cfg.BSCS_COURSES)} BSCS / {len(cfg.BSIT_COURSES)} BSIT, "
+        f"folded into {len(cfg.DOMAIN_KEYS)} shared academic domains",
         f"GWA (1.00 best)     : mean {df['gwa'].mean():.3f}, "
         f"best {df['gwa'].min():.2f}, lowest {df['gwa'].max():.2f}",
-        f"Missing cells       : {int(df.isna().sum().sum())}",
+        f"Credential holders  : {int(df['has_certification'].sum())} "
+        f"({df['has_certification'].mean():.1%} answered 'Yes' to Q7)",
+        f"Missing cells       : {int(df.isna().sum().sum()) - structural} "
+        f"(excluding {structural} blanks for the other program's prospectus)",
         "",
         "Work category distribution (the ML target):",
     ]

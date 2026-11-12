@@ -362,11 +362,17 @@ class CareerRecommender:
             academic_summary={
                 "gwa": float(raw["gwa"].iloc[0]),
                 "gwa_points": round(float(signal_row["gwa_points"]), 1),
-                "core_grade_mean_points": round(float(signal_row["core_grade_mean"]), 1),
-                "certifications": int(signal_row["cert_count"]),
-                "seminar_units": (
-                    None if pd.isna(raw["seminar_units"].iloc[0])
-                    else int(raw["seminar_units"].iloc[0])
+                "domain_grade_mean_points": round(float(signal_row["core_grade_mean"]), 1),
+                "courses_reported": int(
+                    raw[[c.column for c in cfg.COURSES_BY_PROGRAM[program]]].notna().sum(axis=1).iloc[0]
+                ),
+                "holds_credential": bool(raw["has_certification"].iloc[0]),
+                "certification_domains": int(signal_row["cert_count"]),
+                "credential_types": int(signal_row["cert_type_count"]),
+                "skills_ticked": int(
+                    signal_row["tech_skill_count"]
+                    + signal_row["hard_skill_count"]
+                    + signal_row["soft_skill_count"]
                 ),
                 "evt_motivation": round(float(signal_row["evt_motivation"]), 1),
             },
