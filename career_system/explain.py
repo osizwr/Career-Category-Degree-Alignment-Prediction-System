@@ -354,9 +354,9 @@ class LocalExplanation:
                 float(delta[index]), runner[0])
 
     # --------------------------------------------------------------- prose
-    def narrative(self, **kwargs) -> list:
+    def narrative(self, style: str = "human", **kwargs) -> list:
         """The explanation as complete sentences. See narrate_student()."""
-        return narrate_student(self, **kwargs)
+        return narrate_student(self, style=style, **kwargs)
 
 
 def explain_student(pipeline, X_row: pd.DataFrame, class_names: list,
@@ -550,6 +550,56 @@ def describe_value(feature: str, value) -> str:
     return f"your value is {value:.2f}"
 
 
+def describe_value_human(feature: str, value) -> str:
+    """A natural, counselor-style description of what the student reported for `feature`."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "unrecorded response"
+    if not np.isfinite(value):
+        return "no answer provided (cohort average applied)"
+
+    if feature in cfg.SKILL_BY_COLUMN:
+        return "practical hands-on experience verified" if value >= 0.5 else "not reported as an active skill"
+    if feature in cfg.COURSE_BY_COLUMN:
+        return f"course grade of {value:.2f}"
+    if feature.startswith("acad_"):
+        return f"academic average of {_points_clause(value)}"
+    if feature == "core_grade_mean":
+        return f"overall coursework average of {_points_clause(value)}"
+    if feature == "gwa_points":
+        return f"cumulative GWA equivalent to {_points_clause(value)}"
+    if feature == "core_grade_std":
+        return (f"coursework performance varied by {value:.1f} points across domains"
+                if value > 0.05 else "very uniform grades across all subjects")
+    if feature == "has_certification":
+        return ("holds external industry certifications or formal training"
+                if value >= 0.5 else
+                "no external certifications reported")
+    if feature.startswith("cert_type_"):
+        return "credential on record" if value >= 0.5 else "none reported"
+    if feature == "cert_count":
+        n = int(round(value))
+        return f"{n} certified subject {_plural(n, 'domain')}"
+    if feature == "cert_type_count":
+        n = int(round(value))
+        return f"{n} credential {_plural(n, 'type')} completed"
+    if feature.startswith("cert_"):
+        return "certified in this specialization" if value >= 0.5 else "not certified in this subject"
+    if feature == "program_code":
+        return "enrolled in BS Information Technology" if value >= 0.5 else "enrolled in BS Computer Science"
+    if feature.endswith("_skill_count"):
+        total = len(cfg.SKILL_GROUPS.get(feature.split("_")[0], ()))
+        return f"{int(round(value))} of {total} skills applied"
+    if feature.startswith("riasec_"):
+        return f"interest score of {value:.1f}/100"
+    if feature.startswith("sig_"):
+        return f"competency score of {value:.1f}/100"
+    if feature.startswith("evt_"):
+        return f"motivation score of {value:.1f}/100"
+    return f"score of {value:.2f}"
+
+
 _POSITIVE_LEADS = (
     "The strongest single reason is",
     "The second-largest contribution is",
@@ -560,14 +610,135 @@ _POSITIVE_LEADS = (
 
 
 def narrate_student(explanation: LocalExplanation, top_n: int = 5,
-                    negative_n: int = 3) -> list:
+                    negative_n: int = 3, style: str = "human") -> list:
     """Explain one prediction in complete sentences, generated from SHAP.
 
-    Returns a list of sentences, in reading order: how the margin was built,
-    the ranked reasons in favour, what worked against, which kind of evidence
-    dominated, what separated this category from the runner-up, and the
-    additivity check.
+    Parameters
+    ----------
+    explanation : LocalExplanation
+        The per-student SHAP explanation object.
+    top_n : int
+        Number of positive features to narrate in detail.
+    negative_n : int
+        Number of opposing features to cite.
+    style : str
+        'human' (default) for an intuitive, counselor-style narrative;
+        'technical' for the log-odds Lundberg & Lee (2017) additivity breakdown.
     """
+    if style == "technical":
+        return _narrate_student_technical(explanation, top_n=top_n, negative_n=negative_n)
+    return _narrate_student_human(explanation, top_n=top_n, negative_n=negative_n)
+
+
+def _narrate_student_human(explanation: LocalExplanation, top_n: int = 5,
+                           negative_n: int = 3) -> list:
+    """Intuitive, advisor-grade narrative explaining the career recommendation."""
+    category = explanation.predicted_category.upper()
+    contributions = explanation.contributions
+    sentences: list[str] = []
+
+    if contributions.empty:
+        return [f"The system recommends {category} with {explanation.confidence:.1%} "
+                f"confidence based on your general profile."]
+
+    positive = contributions[contributions["shap_value"] > 0] \
+        .sort_values("shap_value", ascending=False)
+    negative = contributions[contributions["shap_value"] < 0] \
+        .sort_values("shap_value")
+    positive_total = float(positive["shap_value"].sum())
+    negative_total = float(negative["shap_value"].sum())
+
+    # ---- 1. Advisor Overview ---------------------------------------------- #
+    opening = (
+        f"Based on your profile, the system recommends {category} as your primary "
+        f"career match with {explanation.confidence:.1%} confidence"
+    )
+    runner_up = explanation.runner_up()
+    if runner_up:
+        opening += f", notably ahead of {runner_up[0].upper()} ({runner_up[1]:.1%})."
+    else:
+        opening += "."
+
+    opening += (
+        f" For {explanation.student_id}, this recommendation is substantiated by "
+        f"{len(positive)} distinct profile strengths that heavily outweigh "
+        f"{len(negative)} counter-indicators."
+    )
+    sentences.append(opening)
+
+    # ---- 2. Primary Positive Drivers -------------------------------------- #
+    denominator = positive_total if positive_total > 1e-9 else float("nan")
+    human_leads = (
+        "The primary driver is",
+        "Second is",
+        "Third is",
+        "Fourth is",
+        "Fifth is",
+    )
+    for rank, (_, row) in enumerate(positive.head(top_n).iterrows()):
+        lead = human_leads[rank] if rank < len(human_leads) else f"Rank {rank + 1} factor is"
+        share = float(row["shap_value"]) / denominator
+        tail = f" -- accounting for {share:.0%} of all positive evidence" if np.isfinite(share) else ""
+        desc = describe_value_human(row["feature"], row["raw_value"])
+        sentences.append(
+            f"{lead} {row['pretty_name']} ({desc}){tail}."
+        )
+
+    remainder = positive.iloc[top_n:]
+    if len(remainder):
+        sentences.append(
+            f"Beyond these primary drivers, an additional {len(remainder)} supporting indicators "
+            f"consistently reinforce this trajectory across your coursework, interests, and competencies."
+        )
+
+    # ---- 3. Opposing / Counterbalancing Factors --------------------------- #
+    if len(negative):
+        clauses = [
+            f"{row['pretty_name']} ({describe_value_human(row['feature'], row['raw_value'])})"
+            for _, row in negative.head(negative_n).iterrows()
+        ]
+        sentences.append(
+            f"Pulling slightly in the other direction, factors such as {join_clauses(clauses)} "
+            f"leaned toward alternative paths. However, these counter-influences were far too small "
+            f"to offset the overwhelming evidence in favor of {category}."
+        )
+
+    # ---- 4. Overall Evidence Distribution --------------------------------- #
+    grouped: dict[str, float] = {}
+    for _, row in contributions.iterrows():
+        phrase = _group_phrase(row["feature"])
+        grouped[phrase] = grouped.get(phrase, 0.0) + abs(float(row["shap_value"]))
+    total_absolute = sum(grouped.values())
+    if total_absolute > 1e-9:
+        ranked = sorted(grouped.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        clauses = [f"{value / total_absolute:.0%} from {phrase}" for phrase, value in ranked]
+        sentences.append(
+            f"Looking at your overall profile, the recommendation is shaped most strongly by "
+            f"{join_clauses(clauses)}."
+        )
+
+    # ---- 5. Distinction from Runner-Up ------------------------------------ #
+    contrast = explanation.contrast_with_runner_up()
+    if contrast is not None:
+        pretty, delta, other = contrast
+        sentences.append(
+            f"Between {category} and your runner-up category ({other.upper()}), the most decisive "
+            f"differentiator is {pretty}: your background here provided the key advantage tipping the "
+            f"balance toward {category}."
+        )
+
+    # ---- 6. Transparency & Fidelity Assurance ----------------------------- #
+    sentences.append(
+        f"This explanation is derived mathematically using SHAP (Shapley Additive Explanations) across "
+        f"all {len(contributions)} features evaluated by the model, ensuring transparent and personalized "
+        f"guidance rooted strictly in your responses."
+    )
+    return sentences
+
+
+def _narrate_student_technical(explanation: LocalExplanation, top_n: int = 5,
+                               negative_n: int = 3) -> list:
+    """The original mathematical Lundberg & Lee (2017) log-odds additivity breakdown."""
     category = explanation.predicted_category.upper()
     contributions = explanation.contributions
     sentences: list[str] = []

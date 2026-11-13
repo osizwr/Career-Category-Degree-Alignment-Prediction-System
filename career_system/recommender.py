@@ -10,7 +10,7 @@ single fourth-year student it produces:
     * the ranked TOP CAREER TRACKS with match scores
     * the SHAP "why was this recommended?" breakdown
     * SKILL GAPS and SUGGESTED ACTIONS
-    * PALAWAN INTERNSHIP / EMPLOYMENT DESTINATIONS
+    *Suggested Sectors 
 
 Nothing here invents information. Every number traces back to a grade, a
 certificate or a self-reported skill, which is the property that makes the
@@ -56,7 +56,7 @@ class StudentReport:
     academic_summary: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------ text
-    def render(self, width: int = 78) -> str:
+    def render(self, width: int = 78, explanation_style: str = "human") -> str:
         """Format the report the way the dashboard would present it."""
         line = "=" * width
         thin = "-" * width
@@ -118,14 +118,14 @@ class StudentReport:
             out.append("")
 
         # ---------------------------------------------------- explanation ---
-        out += ["  WHY WAS THIS RECOMMENDED?  (SHAP explanation)", thin]
+        header_tag = "Counselor Explanation" if explanation_style == "human" else "SHAP explanation"
+        out += [f"  WHY WAS THIS RECOMMENDED?  ({header_tag})", thin]
         if self.explanation is not None:
             # The prose is generated from the SHAP values themselves
             # (explain.narrate_student), so every clause carries the
-            # contribution that produced it. The signed table behind these
-            # sentences is in the JSON report and the local SHAP figure.
+            # contribution that produced it.
             out.append("")
-            out.append(xai.format_sentences(self.explanation.narrative(),
+            out.append(xai.format_sentences(self.explanation.narrative(style=explanation_style),
                                             width=width - 2, indent=4))
         else:
             out.append("    (SHAP unavailable - install the `shap` package for this section.)")
@@ -143,7 +143,7 @@ class StudentReport:
                 "    " + "  |  ".join(self.actions)]
 
         # ------------------------------------------------------ employers ---
-        out += ["", "  PALAWAN INTERNSHIP / EMPLOYMENT DESTINATIONS", thin]
+        out += ["", " Suggested Sectors ", thin]
         current_sector = None
         for employer in self.employers:
             if employer["sector"] != current_sector:
@@ -217,7 +217,10 @@ class StudentReport:
             # The same SHAP output as sentences, for any front end that wants
             # to show the explanation rather than plot it.
             "shap_narrative": (
-                self.explanation.narrative() if self.explanation is not None else []
+                self.explanation.narrative(style="human") if self.explanation is not None else []
+            ),
+            "shap_narrative_technical": (
+                self.explanation.narrative(style="technical") if self.explanation is not None else []
             ),
             "shap_additivity": (
                 {"base_value": round(self.explanation.base_value, 4),
@@ -413,12 +416,12 @@ class CareerRecommender:
 # --------------------------------------------------------------------------- #
 # Saving
 # --------------------------------------------------------------------------- #
-def save_report(report: StudentReport, outdir=None) -> dict:
+def save_report(report: StudentReport, outdir=None, explanation_style: str = "human") -> dict:
     outdir = outdir or cfg.REPORT_DIR
     slug = report.student_id.replace("-", "_").lower()
 
     text_path = outdir / f"report_{slug}.txt"
-    text_path.write_text(report.render())
+    text_path.write_text(report.render(explanation_style=explanation_style))
 
     json_path = outdir / f"report_{slug}.json"
     json_path.write_text(json.dumps(report.to_dict(), indent=2))

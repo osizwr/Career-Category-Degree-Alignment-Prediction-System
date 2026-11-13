@@ -211,9 +211,10 @@ def cmd_recommend(args) -> None:
 
     for _, student in selection.iterrows():
         report = recommender.recommend(student, top_n=args.top_n)
-        print("\n" + report.render())
+        style = getattr(args, "explanation_style", "human")
+        print("\n" + report.render(explanation_style=style))
 
-        written = rec.save_report(report)
+        written = rec.save_report(report, explanation_style=style)
         if report.explanation is not None:
             written["figure"] = xai.plot_local_explanation(report.explanation)
         report_written(written)
@@ -273,7 +274,8 @@ def cmd_predict(args, recommender=None) -> None:
 
     step("Scoring your profile")
     report = recommender.recommend(frame.iloc[0], top_n=args.top_n)
-    print("\n" + report.render())
+    style = getattr(args, "explanation_style", "human")
+    print("\n" + report.render(explanation_style=style))
 
     print("\n  CHAPTER IV LABELLING RUBRIC, FOR COMPARISON")
     print("  " + "-" * 74)
@@ -296,7 +298,7 @@ def cmd_predict(args, recommender=None) -> None:
     ui.print_next_steps(report)
 
     if args.save_report:
-        written = rec.save_report(report)
+        written = rec.save_report(report, explanation_style=style)
         report_written(written)
 
 
@@ -503,6 +505,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--student-id", help="e.g. PSU-0007; omit to pick at random")
     p.add_argument("--count", type=int, default=1, help="how many random students (default: 1)")
     p.add_argument("--top-n", type=int, default=3, help="career tracks to show (default: 3)")
+    p.add_argument("--explanation-style", choices=["human", "technical"], default="human",
+                   help="style of explanation narrative: 'human' (advisor-friendly, default) or 'technical' (log-odds)")
     p.set_defaults(func=cmd_recommend)
 
     p = common(sub.add_parser(
@@ -513,6 +517,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--save-answers", help="write the answers to a JSON file")
     p.add_argument("--save-report", action="store_true",
                    help="also write the report to outputs/reports/")
+    p.add_argument("--explanation-style", choices=["human", "technical"], default="human",
+                   help="style of explanation narrative: 'human' (advisor-friendly, default) or 'technical' (log-odds)")
     p.set_defaults(func=cmd_predict)
 
     p = common(sub.add_parser("batch", help="recommendation export for the whole cohort"))
