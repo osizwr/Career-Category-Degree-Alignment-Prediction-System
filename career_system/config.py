@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 # --------------------------------------------------------------------------- #
 # Project paths
@@ -70,33 +71,87 @@ CV_FOLDS = 5            # "Stratified K-Fold Cross-Validation (k=5)"
 # --------------------------------------------------------------------------- #
 # Grading scale
 # --------------------------------------------------------------------------- #
-# Philippine state-university scale: 1.00 is the HIGHEST mark, 3.00 is the
-# passing mark, 5.00 is a failure. Because "lower is better" is the opposite of
-# what most ML models assume, every grade is converted to 0-100 "grade points"
-# (higher = better) before it reaches a model. See grade_to_points().
+# Palawan State University (PSU) Undergraduate and Graduate Grading Scale:
+#   1.00 : 98% - 100%  (Excellent)
+#   1.25 : 95% - 97%   (Excellent)
+#   1.50 : 92% - 94%   (Superior / Highly Satisfactory)
+#   1.75 : 89% - 91%   (Highly Satisfactory)
+#   2.00 : 86% - 88%   (Satisfactory)
+#   2.25 : 83% - 85%   (Satisfactory)
+#   2.50 : 80% - 82%   (Fairly Satisfactory)
+#   2.75 : 77% - 79%   (Fairly Satisfactory)
+#   3.00 : 75% - 76%   (Passed)
+#   4.00 : Conditional (Needs re-examination or repetition)
+#   5.00 : Below 75%   (Failed)
+#   INC  : Incomplete
 GRADE_BEST = 1.00
 GRADE_PASS = 3.00
 GRADE_WORST = 5.00
 LOWER_GRADE_IS_BETTER = True
 
+PSU_GRADING_SCALE = (
+    (1.00, 98.0, 100.0, 99.0, "Excellent"),
+    (1.25, 95.0,  97.0, 96.0, "Excellent"),
+    (1.50, 92.0,  94.0, 93.0, "Superior / Highly Satisfactory"),
+    (1.75, 89.0,  91.0, 90.0, "Highly Satisfactory"),
+    (2.00, 86.0,  88.0, 87.0, "Satisfactory"),
+    (2.25, 83.0,  85.0, 84.0, "Satisfactory"),
+    (2.50, 80.0,  82.0, 81.0, "Fairly Satisfactory"),
+    (2.75, 77.0,  79.0, 78.0, "Fairly Satisfactory"),
+    (3.00, 75.0,  76.0, 75.5, "Passed"),
+    (4.00, 70.0,  74.0, 72.0, "Conditional (Needs re-examination or repetition)"),
+    (5.00,  0.0,  69.0,   0.0, "Failed"),
+)
+
+_PSU_GRADES = np.array([1.00, 1.25, 1.50, 1.75, 2.00, 2.25, 2.50, 2.75, 3.00, 4.00, 5.00])
+_PSU_POINTS = np.array([99.0, 96.0, 93.0, 90.0, 87.0, 84.0, 81.0, 78.0, 75.5, 72.0,  0.0])
+
+# Reversed monotonic arrays for points_to_grade (xp must be increasing)
+_POINTS_XP = np.concatenate(([0.0], _PSU_POINTS[::-1][1:], [100.0]))
+_GRADES_FP = np.concatenate(([5.00], _PSU_GRADES[::-1][1:], [1.00]))
+
 
 def grade_to_points(grade):
-    """Convert a 1.00-5.00 grade into 0-100 points where higher = better.
+    """Convert a 1.00-5.00 grade into 0-100 percentage points using the PSU scale.
 
-    1.00 -> 100.0   (excellent)
-    1.75 ->  81.25
-    3.00 ->  50.0   (passing)
-    5.00 ->   0.0   (failed)
+    Maps discrete grades to the midpoint of their official percentage equivalent
+    (e.g. 1.00 -> 99.0%, 2.00 -> 87.0%, 3.00 -> 75.5%, 5.00 -> 0.0%) and
+    interpolates continuous values (like GWA 2.0588 -> 86.29%) smoothly.
     """
-    grade = np.asarray(grade, dtype=float)
-    points = (GRADE_WORST - grade) / (GRADE_WORST - GRADE_BEST) * 100.0
-    return np.clip(points, 0.0, 100.0)
+    is_series = isinstance(grade, pd.Series)
+    is_scalar = np.isscalar(grade) or (isinstance(grade, np.ndarray) and grade.ndim == 0)
+
+    arr = np.asarray(grade, dtype=float)
+    mask = np.isnan(arr)
+    valid = np.where(mask, 1.00, arr)
+    valid_clipped = np.clip(valid, GRADE_BEST, GRADE_WORST)
+    res = np.interp(valid_clipped, _PSU_GRADES, _PSU_POINTS)
+    res = np.where(mask, np.nan, res)
+
+    if is_scalar:
+        return float(res) if not np.isnan(res) else np.nan
+    if is_series:
+        return pd.Series(res, index=grade.index)
+    return res
 
 
 def points_to_grade(points):
-    """Inverse of grade_to_points(): 0-100 points back to a 1.00-5.00 grade."""
-    points = np.asarray(points, dtype=float)
-    return GRADE_WORST - (points / 100.0) * (GRADE_WORST - GRADE_BEST)
+    """Inverse of grade_to_points(): 0-100 percentage points back to a 1.00-5.00 grade."""
+    is_series = isinstance(points, pd.Series)
+    is_scalar = np.isscalar(points) or (isinstance(points, np.ndarray) and points.ndim == 0)
+
+    arr = np.asarray(points, dtype=float)
+    mask = np.isnan(arr)
+    valid = np.where(mask, 100.0, arr)
+    valid_clipped = np.clip(valid, 0.0, 100.0)
+    res = np.interp(valid_clipped, _POINTS_XP, _GRADES_FP)
+    res = np.where(mask, np.nan, res)
+
+    if is_scalar:
+        return float(res) if not np.isnan(res) else np.nan
+    if is_series:
+        return pd.Series(res, index=points.index)
+    return res
 
 
 # --------------------------------------------------------------------------- #

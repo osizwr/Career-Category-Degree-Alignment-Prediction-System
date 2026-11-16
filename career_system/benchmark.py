@@ -18,6 +18,8 @@ and figures can be dropped straight into Chapter V.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import warnings
 from dataclasses import dataclass, field
 
@@ -356,6 +358,36 @@ def _print_verdict(result: BenchmarkResult) -> None:
 # Figures
 # --------------------------------------------------------------------------- #
 _PALETTE = {"ZeroR": "#94a3b8", "Logistic Regression": "#f59e0b", "_boost": "#2563eb"}
+
+
+def _safe_savefig(fig, path, **kwargs):
+    """Save a matplotlib figure, working around Windows file-lock errors.
+
+    On Windows another process (VS Code preview, Explorer thumbnails, an image
+    viewer) can hold the target PNG open, causing PIL to raise
+    ``OSError: [Errno 22] Invalid argument``.  Writing to a temporary file in
+    the same directory first and then atomically replacing the target avoids
+    this because ``os.replace`` only needs the directory to be writable, not
+    the target file to be unlocked.
+    """
+    from pathlib import Path
+    path = Path(path)
+    try:
+        fig.savefig(path, **kwargs)
+    except OSError:
+        # Write to a temp file in the same directory, then swap.
+        fd, tmp = tempfile.mkstemp(suffix=".png", dir=path.parent)
+        os.close(fd)
+        try:
+            fig.savefig(tmp, **kwargs)
+            os.replace(tmp, path)
+        except Exception:
+            # Clean up the temp file on any downstream error.
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def _model_colour(name: str) -> str:
