@@ -118,8 +118,10 @@ class StudentReport:
             out.append("")
 
         # ---------------------------------------------------- explanation ---
-        header_tag = "Counselor Explanation" if explanation_style == "human" else "SHAP explanation"
-        out += [f"  WHY WAS THIS RECOMMENDED?  ({header_tag})", thin]
+        header = "  WHY WAS THIS RECOMMENDED?"
+        if explanation_style == "technical":
+            header += "  (SHAP explanation)"
+        out += [header, thin]
         if self.explanation is not None:
             # The prose is generated from the SHAP values themselves
             # (explain.narrate_student), so every clause carries the

@@ -109,7 +109,7 @@
   <p class="subtitle">An Explainable Career Category Recommendation System for Computer Science and
   Information Technology Graduating Students using Ensemble and Baseline Classifiers</p>
   <p class="meta">Every transformation from raw questionnaire answer to final recommendation, with the
-  formula computed at each stage and the real values for student R001 · 14 November 2026</p>
+  formula computed at each stage and the real values for student R001 · 16 November 2026</p>
 </div>
 
 <p class="lede">This walkthrough follows one student, <b>R001</b>, through all twelve processing stages.
@@ -199,33 +199,37 @@ In practice the label is 55% core courses / 45% skills. Finally, R001's margin i
 sends exactly this student to the adviser.</div>
 
 <!-- ============================ STAGE 3 ============================ -->
-<h2><span class="n">STAGE 3</span>Flip the grade scale</h2>
-<p class="where"><b>Code:</b> <code>config.py:grade_to_points</code></p>
+<h2><span class="n">STAGE 3</span>Align with the official PSU grading scale</h2>
+<p class="where"><b>Code:</b> <code>config.py:grade_to_points</code>, <code>config.py:points_to_grade</code></p>
 
-<pre class="code"><span class="tag c">Code</span>points = (GRADE_WORST - grade) / (GRADE_WORST - GRADE_BEST) * 100.0</pre>
+<pre class="code"><span class="tag c">Code</span># Anchored to the PSU Undergraduate and Graduate Grading Scale table:
+_PSU_GRADES = np.array([1.00, 1.25, 1.50, 1.75, 2.00, 2.25, 2.50, 2.75, 3.00, 4.00, 5.00])
+_PSU_POINTS = np.array([99.0, 96.0, 93.0, 90.0, 87.0, 84.0, 81.0, 78.0, 75.5, 72.0,  0.0])
+points = np.interp(np.clip(grade, 1.00, 5.00), _PSU_GRADES, _PSU_POINTS)</pre>
 
 <p><b>Human:</b> On the PSU scale 1.00 is excellent and 5.00 is a failure — <i>lower is better</i>. Feed that
 to a model and every SHAP plot reads backwards: it would say "high grades push you away from Technical."
-So grades flip to 0–100 points where higher always means better.</p>
+To fix this, grades are converted into 0–100 percentage points anchored directly to the <b>official PSU
+Undergraduate and Graduate Grading Scale</b>. Discrete marks use the midpoint of their official percentage
+bracket, and continuous GWAs interpolate smoothly between them.</p>
 
-<pre class="formula"><span class="tag f">Formula</span>               G_worst − g
-    p   =   ───────────────────  × 100           then clipped to [0, 100]
-              G_worst − G_best
+<pre class="formula"><span class="tag f">Formula</span>Discrete grades map to the midpoint percentage equivalent:
 
-with  G_best = 1.00  and  G_worst = 5.00 :
+       1.00 (98–100%) → 99.0%     1.25 (95–97%) → 96.0%     1.50 (92–94%) → 93.0%
+       1.75 (89–91%)  → 90.0%     2.00 (86–88%) → 87.0%     2.25 (83–85%) → 84.0%
+       2.50 (80–82%)  → 81.0%     2.75 (77–79%) → 78.0%     3.00 (75–76%) → 75.5% (Passed)
+       4.00 (Cond.)   → 72.0%     5.00 (&lt;75%)   →  0.0% (Failed)
 
-               5.00 − g
-    p   =   ──────────────  × 100                a linear, order-reversing map
-                 4.00</pre>
+Continuous grades (such as GWA) interpolate piecewise-linearly along these PSU anchors.</pre>
 
 <table>
-  <tr><th>grade g</th><th>1.00</th><th>1.25</th><th>1.75</th><th>2.00</th><th>2.0588</th><th>3.00</th><th>5.00</th></tr>
-  <tr><td>points p</td><td class="num">100.00</td><td class="num">93.75</td><td class="num">81.25</td>
-      <td class="num">75.00</td><td class="num">73.53</td><td class="num">50.00</td><td class="num">0.00</td></tr>
+  <tr><th>Numerical Grade g</th><th>1.00</th><th>1.25</th><th>1.50</th><th>1.75</th><th>2.00</th><th>2.0588</th><th>2.50</th><th>3.00</th><th>4.00</th><th>5.00</th></tr>
+  <tr><td>Official Range</td><td>98–100%</td><td>95–97%</td><td>92–94%</td><td>89–91%</td><td>86–88%</td><td>Satisfactory</td><td>80–82%</td><td>75–76%</td><td>Cond.</td><td>&lt;75%</td></tr>
+  <tr><td>Points p</td><td class="num">99.00</td><td class="num">96.00</td><td class="num">93.00</td><td class="num">90.00</td><td class="num">87.00</td><td class="num">86.29</td><td class="num">81.00</td><td class="num">75.50</td><td class="num">72.00</td><td class="num">0.00</td></tr>
 </table>
 
-<pre class="numbers"><span class="tag n">R001</span>gwa 2.0588  →  (5 − 2.0588) / 4 × 100  =  73.53 points
-grade 1.5   →  87.50        grade 3.0  →  50.00        grade 1.25  →  93.75</pre>
+<pre class="numbers"><span class="tag n">R001</span>gwa 2.0588  →  86.29 points (comfortably within PSU's 86%–88% "Satisfactory" band)
+grade 1.50  →  93.00        grade 3.00  →  75.50        grade 1.25  →  96.00        grade 2.75  →  78.00</pre>
 
 <!-- ============================ STAGE 4 ============================ -->
 <h2><span class="n">STAGE 4</span>Fold 41 courses into 10 shared domains</h2>
@@ -262,21 +266,21 @@ belong to more than one domain.</p>
 Because a student only answers one prospectus, averaging over BOTH programs' columns
 for a domain is exactly the mean of whichever set is filled in.</pre>
 
-<pre class="numbers"><span class="tag n">R001 — BSCS, 17 courses</span>acad_foundations            = mean(87.5)                           = 87.50
-acad_programming            = mean(50.0, 56.25, 50.0, 75.0)       = 57.81
-acad_theory_analytics       = mean(50.0, 68.75, 75.0, 75.0, 50.0) = 63.75
-acad_data_management        = mean(68.75)                         = 68.75
-acad_networking             = mean(75.0)                          = 75.00
-acad_security               = mean(87.5)                          = 87.50
-acad_web_design             = mean(81.25)                         = 81.25
-acad_systems_engineering    = mean(56.25, 93.75)                  = 75.00
-acad_infrastructure_support = mean(87.5, 81.25)                   = 84.38
-acad_professional_practice  = mean(87.5)                          = 87.50
+<pre class="numbers"><span class="tag n">R001 — BSCS, 17 courses (with official PSU percentage points)</span>acad_foundations            = mean(93.0)                           = 93.00
+acad_programming            = mean(75.5, 78.0, 75.5, 87.0)        = 79.00
+acad_theory_analytics       = mean(75.5, 84.0, 87.0, 87.0, 75.5)  = 81.80
+acad_data_management        = mean(84.0)                          = 84.00
+acad_networking             = mean(87.0)                          = 87.00
+acad_security               = mean(93.0)                          = 93.00
+acad_web_design             = mean(90.0)                          = 90.00
+acad_systems_engineering    = mean(78.0, 96.0)                    = 87.00
+acad_infrastructure_support = mean(93.0, 90.0)                    = 91.50
+acad_professional_practice  = mean(93.0)                          = 93.00
 
-core_grade_mean = 76.84        core_grade_std = 10.11</pre>
+core_grade_mean = 87.93        core_grade_std = 4.78</pre>
 
-<p>The standard deviation is doing real work: 10.11 means a spiky profile — strong in security and
-infrastructure (87), weak in programming (58).</p>
+<p>The standard deviation is doing real work: 4.78 reflects realistic variation across coursework domains,
+with solid foundational and security grades (93.0) and lower programming marks (79.0).</p>
 
 <!-- ============================ STAGE 5 ============================ -->
 <h2><span class="n">STAGE 5</span>Competency signals — the heart of it</h2>

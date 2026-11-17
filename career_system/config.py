@@ -159,7 +159,7 @@ def points_to_grade(points):
 # --------------------------------------------------------------------------- #
 PROGRAMS = ("BSCS", "BSIT")
 
-PROGRAM_LABELS = {
+PROGRAM_LABELS = {                                                                                                                                                                                                                                                                                      
     "BSCS": "BS Computer Science",
     "BSIT": "BS Information Technology",
 }

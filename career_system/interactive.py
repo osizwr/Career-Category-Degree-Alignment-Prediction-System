@@ -181,7 +181,7 @@ def run_questionnaire(student_id: str = "YOU") -> dict:
     # ---------------------------------------------------- Part II: profile ---
     _section("PART II - STUDENT PROFILE")
     program = ask_choice(
-        "4. What is your degree program?",
+        "What is your degree program?",
         [(p, f"{cfg.PROGRAM_LABELS[p]} ({p})") for p in cfg.PROGRAMS],
     )
     record["program"] = program
@@ -189,7 +189,7 @@ def run_questionnaire(student_id: str = "YOU") -> dict:
           f"({len(cfg.COURSES_BY_PROGRAM[program])} courses).")
 
     print()
-    record["gwa"] = ask_grade("6. Cumulative General Weighted Average (GWA)",
+    record["gwa"] = ask_grade("Cumulative General Weighted Average (GWA)",
                               allow_blank=False)
 
     # ------------------------------------------------------------- grades ---
@@ -198,7 +198,7 @@ def run_questionnaire(student_id: str = "YOU") -> dict:
         record[course.column] = None
 
     _section(
-        "PART II - CORE COURSE GRADES",
+        "CORE COURSE GRADES",
         f"The model reads your grades through {len(cfg.DOMAIN_KEYS)} shared "
         f"competency domains, so a blank course only weakens the domain it "
         f"belongs to -- it does not invalidate your profile."
@@ -216,11 +216,11 @@ def run_questionnaire(student_id: str = "YOU") -> dict:
         print(f"\n    -> {entered} of {len(courses)} course grades recorded.")
     else:
         print("\n    -> Skipped. Your academic profile will rest on your GWA alone,")
-        print("       which is 20% of the Chapter IV rubric rather than the full 50%.")
+        print("       which is 20% of the rubric rather than the full 50%.")
 
     # -------------------------------------------- Part III: certifications ---
     _section(
-        "PART III - CERTIFICATIONS, SEMINARS AND TRAINING",
+        "CERTIFICATIONS, SEMINARS AND TRAINING",
         "Professional certifications, technical seminars, workshops, webinars or "
         "training activities relevant to Computer Science, Information Technology "
         "or your intended career."
@@ -230,11 +230,11 @@ def run_questionnaire(student_id: str = "YOU") -> dict:
     for domain in cfg.CERT_DOMAINS:
         record[f"cert_{domain}"] = 0
 
-    has_cert = ask_yes_no("7. Have you completed any of these?", default=False)
+    has_cert = ask_yes_no("Have you completed any of these?", default=False)
     record["has_certification"] = int(has_cert)
 
     if has_cert:
-        print("\n  8. Name the certifications, seminars, workshops, webinars or")
+        print("\n  Name the certifications, seminars, workshops, webinars or")
         print("     trainings you completed, separated by commas.")
         names = _ask("  Your answer: ")
         domains = recognise_cert_domains(names)
@@ -251,7 +251,7 @@ def run_questionnaire(student_id: str = "YOU") -> dict:
 
         type_keys = list(cfg.CERTIFICATION_TYPES)
         picked = ask_checkboxes(
-            "9. What type of credential or activity? (tick all that apply)",
+            "What type of credential or activity? (tick all that apply)",
             [cfg.CERTIFICATION_TYPES[k] for k in type_keys],
         )
         for index in picked:
@@ -264,15 +264,15 @@ def run_questionnaire(student_id: str = "YOU") -> dict:
 
     # ------------------------------------------------------ Part IV: skills ---
     _section(
-        "PART IV - SKILLS",
+        "SKILLS",
         "Check all the skills you have ACTUALLY USED. There is no rating here: "
         "the questionnaire asks what you have done, not how good you are at it."
     )
 
     group_questions = {
-        "tech": ("10. Technical skills", "specialised computing skills"),
-        "hard": ("11. Hard skills", "measurable skills that are not specific to computing"),
-        "soft": ("12. Soft skills", "personal and interpersonal skills"),
+        "tech": ("Technical skills", "specialised computing skills"),
+        "hard": ("Hard skills", "measurable skills that are not specific to computing"),
+        "soft": ("Soft skills", "personal and interpersonal skills"),
     }
     for group, skills in cfg.SKILL_GROUPS.items():
         number, blurb = group_questions[group]
